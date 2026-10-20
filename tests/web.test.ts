@@ -3,43 +3,15 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
-import { readdirSync, readFileSync } from 'node:fs';
 import { createServer, request, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { join, relative } from 'node:path';
 import { after, test } from 'node:test';
 import { runInNewContext } from 'node:vm';
 import { openGitHub, type Fetch } from '../src/core/github.ts';
 import { replay, type Recording } from '../src/core/replay.ts';
 import { run } from '../src/commands.ts';
 import { createWebServer } from '../src/web.ts';
-import { CLI, EXAMPLE, EXAMPLE_COMMIT, FIXTURE } from './helpers.ts';
-
-const COMMIT = '0123456789abcdef0123456789abcdef01234567';
-
-/** What GitHub answers for JetBrains/<name>: a tree of the files, and the files at COMMIT. */
-function onGitHub(name: string, files: Record<string, string>): Recording {
-  const recording: Recording = {
-    [`https://api.github.com/repos/JetBrains/${name}`]: { status: 200, body: { full_name: `JetBrains/${name}`, default_branch: 'main' } },
-    [`https://api.github.com/repos/JetBrains/${name}/commits/main`]: { status: 200, body: { sha: COMMIT } },
-    [`https://api.github.com/repos/JetBrains/${name}/git/trees/${COMMIT}?recursive=1`]: {
-      status: 200,
-      body: { truncated: false, tree: Object.keys(files).map((path) => ({ path, mode: '100644', type: 'blob', sha: COMMIT })) },
-    },
-  };
-  for (const [path, body] of Object.entries(files)) {
-    recording[`https://raw.githubusercontent.com/JetBrains/${name}/${COMMIT}/${path}`] = { status: 200, body };
-  }
-  return recording;
-}
-
-/** ./fixture, as if it were JetBrains/fixture. */
-function fixtureOnGitHub(): Recording {
-  const paths = (readdirSync(FIXTURE, { recursive: true, withFileTypes: true }) as import('node:fs').Dirent[])
-    .filter((entry) => entry.isFile())
-    .map((entry) => relative(FIXTURE, join(entry.parentPath, entry.name)));
-  return onGitHub('fixture', Object.fromEntries(paths.map((path) => [path, readFileSync(join(FIXTURE, path), 'utf8')])));
-}
+import { CLI, COMMIT, EXAMPLE, EXAMPLE_COMMIT, FIXTURE, fixtureOnGitHub, onGitHub } from './helpers.ts';
 
 /** A skill whose front matter and content are markup. */
 const MARKUP = onGitHub('markup', {

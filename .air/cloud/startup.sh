@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Air cloud startup: Node >= 24 and npm dependencies for Skill Atlas (a CLI; no server to start).
+# Air cloud startup: Node >= 24, npm dependencies and headless Chromium for Skill Atlas (a CLI; no server to start).
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
@@ -36,6 +36,12 @@ echo "[startup] node $(node -v), npm $(npm -v)"
 echo "[startup] npm ci"
 npm ci --no-audit --no-fund
 echo "[startup] dependencies installed"
+
+# Headless Chromium for `npm run demo`, the filter on video (spec/demo.md): no display needed. The
+# system libraries need root; without them, the demo's test is skipped outside CI.
+echo "[startup] playwright chromium"
+if [ "$(id -u)" = 0 ]; then npx playwright install --with-deps --only-shell chromium
+else npx playwright install --only-shell chromium; fi
 
 # The same checks as CI (.github/workflows/ci.yml): typecheck, tests, and the real CLI on the fixture.
 healthcheck() {

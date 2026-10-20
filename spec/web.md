@@ -20,6 +20,7 @@ A **GitHub repository** URL, in the page's form: `GET /?repo=<URL>`
   - **On the fly**: as the word is typed, the list and the skills follow, *no new request*, *no new scan*;
     the address keeps the words, a link to share. The page's *only* script; with it, Enter submits nothing;
     without it, Enter in the field submits the words, a new request
+  - A video of it: [demo.md](demo.md)
   - The anchors stay those of the whole list; the *first matching* skill is selected by default,
     a link to a skill that does not match too
   - No skill matches → `No skills match “<words>”.`, the field still there

@@ -21,9 +21,17 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
+      # Headless Chromium for the demo video's test (tests/demo.test.ts): in CI it must run, not skip.
+      - run: npx playwright install --with-deps --only-shell chromium
       - run: npm test
       # The real CLI on the fixture repository, as a user would run it: it must exit 0.
       - name: Smoke test
         run: |
           ./skill-atlas help
           ./skill-atlas scan ./fixture
+      # The filter, on video: download it from the run's artifacts.
+      - run: npm run demo
+      - uses: actions/upload-artifact@v7
+        with:
+          name: filter-demo
+          path: recordings/filter.webm
