@@ -34,6 +34,10 @@ A **GitHub organization** URL in the same form: `GET /?repo=<organization URL>`,
   *No script*: a form, `Show skills` submits it
 - Choosing one is `GET /?org=<organization URL>&repo=<repository URL>`: the chooser again, the repository chosen,
   then the repository's skills, as above; the filter keeps the organization
+- Nothing stored: each such page lists the organization *again*, next to the repository's scan; without
+  `GITHUB_TOKEN`, a request per repository of the organization
+- The organization cannot be listed → the repository is still shown, a *warning* instead of the chooser;
+  `org` not an organization URL → the clear message, status 400
 - No repository with skills → `No repositories with skills found.`, no chooser
 ## Errors
 - Not a GitHub URL, or an unreachable repository or organization → the clear message on the page, status 400

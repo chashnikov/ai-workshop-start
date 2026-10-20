@@ -30,10 +30,10 @@ function list(url: string, repositories: { id: string; branch?: string }[]): Rec
   return recording;
 }
 
-/** A repository's tree at its default branch, for listing it in its organization. */
-function tree(id: string, paths: string[], branch = 'main'): Recording {
+/** A repository's tree at its default branch, or at a commit, for listing it in its organization. */
+function tree(id: string, paths: string[], ref = 'main'): Recording {
   return {
-    [`${API}/repos/${id}/git/trees/${branch}?recursive=1`]: {
+    [`${API}/repos/${id}/git/trees/${ref}?recursive=1`]: {
       status: 200,
       body: { truncated: false, tree: paths.map((path) => ({ path, mode: '100644', type: 'blob', sha: COMMIT })) },
     },
@@ -66,27 +66,32 @@ const TOOLS = {
 
 /**
  * Acme, an organization: Acme/tools with two skills (one with a copy), Acme/agents with one on a
- * `release/1` branch, Acme/docs with none, and Acme/empty, which GitHub cannot list.
+ * `release/1` branch, Acme/forked, a fork, with one, Acme/docs with none, and Acme/empty, which
+ * GitHub cannot list.
  */
 const ACME: Recording = {
   ...owner('Acme', 'Organization'),
-  ...list(`${API}/orgs/Acme/repos?type=all`, [{ id: 'Acme/tools' }, { id: 'Acme/docs' }, { id: 'Acme/empty' }, { id: 'Acme/agents', branch: 'release/1' }]),
+  ...list(`${API}/orgs/Acme/repos?type=all`, [{ id: 'Acme/tools' }, { id: 'Acme/docs' }, { id: 'Acme/empty' }, { id: 'Acme/agents', branch: 'release/1' }, { id: 'Acme/forked' }]),
   ...tree('Acme/tools', Object.keys(TOOLS)),
   ...tree('Acme/docs', ['README.md', 'skills/SKILL.md']),
   [`${API}/repos/Acme/empty/git/trees/main?recursive=1`]: { status: 409, body: { message: 'Git Repository is empty.' } },
-  ...tree('Acme/agents', ['agent/skills/deploy/SKILL.md'], 'release/1'),
+  // A branch name with `/`: resolved to its commit first.
+  [`${API}/repos/Acme/agents/commits/release/1`]: { status: 200, body: { sha: COMMIT } },
+  ...tree('Acme/agents', ['agent/skills/deploy/SKILL.md'], COMMIT),
+  ...tree('Acme/forked', ['.claude/skills/upstream/SKILL.md']),
   ...repository('Acme/tools', TOOLS),
-  // With a token: one code search over the organization, which finds other files named SKILL.md too.
-  [`${API}/search/code?q=filename:SKILL.md+org:Acme&per_page=100&page=1`]: {
+  // With a token: one code search over the organization, forks too, which finds other files named SKILL.md too.
+  [`${API}/search/code?q=filename:SKILL.md+org:Acme+fork:true&per_page=100&page=1`]: {
     status: 200,
     body: {
-      total_count: 5,
+      total_count: 7,
       items: [
         ...['.claude/skills/review/SKILL.md', '.agents/skills/review/SKILL.md', '.github/skills/testing/SKILL.md', 'docs/skills/not-a-skill/SKILL.md'].map(
           (path) => ({ path, repository: { full_name: 'Acme/tools' } }),
         ),
         { path: 'agent/skills/deploy/SKILL.md', repository: { full_name: 'Acme/agents' } },
         { path: 'skills/SKILL.md', repository: { full_name: 'Acme/docs' } },
+        { path: '.claude/skills/upstream/SKILL.md', repository: { full_name: 'Acme/forked' } },
       ],
     },
   },
@@ -97,7 +102,7 @@ const OCTO: Recording = {
   ...owner('octo', 'User'),
   ...list(`${API}/users/octo/repos?type=owner`, [{ id: 'octo/dotfiles' }]),
   ...tree('octo/dotfiles', ['.claude/skills/shell/SKILL.md']),
-  [`${API}/search/code?q=filename:SKILL.md+user:octo&per_page=100&page=1`]: {
+  [`${API}/search/code?q=filename:SKILL.md+user:octo+fork:true&per_page=100&page=1`]: {
     status: 200,
     body: { total_count: 1, items: [{ path: '.claude/skills/shell/SKILL.md', repository: { full_name: 'octo/dotfiles' } }] },
   },
@@ -128,9 +133,11 @@ async function atlas(args: string[], fetch = github, token?: string) {
 }
 
 const ACME_OUTPUT = [
-  'Acme · 2 repositories with skills',
+  'Acme · 3 repositories with skills',
   'Acme/agents · 1 skill',
   '  https://github.com/Acme/agents',
+  'Acme/forked · 1 skill',
+  '  https://github.com/Acme/forked',
   'Acme/tools · 2 skills',
   '  https://github.com/Acme/tools',
 ].join('\n');
@@ -162,13 +169,27 @@ test('scan <organization URL>: a repository that cannot be listed is a warning, 
   );
 });
 
-test('scan <organization URL> with GITHUB_TOKEN: one code search over the organization, the same repositories', async () => {
+test('scan <organization URL> with GITHUB_TOKEN: one code search over the organization, forks too, the same repositories', async () => {
   const requests: string[] = [];
   const result = await atlas(['scan', 'https://github.com/Acme'], (url, init) => (requests.push(url), github(url, init)), 'test');
   assert.equal(result.code, 0, result.stderr);
   assert.equal(result.stdout, ACME_OUTPUT);
   assert.equal(result.stderr, '');
-  assert.deepEqual(requests, [`${API}/users/Acme`, `${API}/search/code?q=filename:SKILL.md+org:Acme&per_page=100&page=1`]);
+  assert.deepEqual(requests, [`${API}/users/Acme`, `${API}/search/code?q=filename:SKILL.md+org:Acme+fork:true&per_page=100&page=1`]);
+});
+
+test('GITHUB_TOKEN: a code search that timed out → what it found, and a warning', async () => {
+  const timedOut = replay({
+    ...owner('Slow', 'Organization'),
+    [`${API}/search/code?q=filename:SKILL.md+org:Slow+fork:true&per_page=100&page=1`]: {
+      status: 200,
+      body: { total_count: 1, incomplete_results: true, items: [{ path: '.claude/skills/a/SKILL.md', repository: { full_name: 'Slow/a' } }] },
+    },
+  });
+  const result = await atlas(['scan', 'https://github.com/Slow'], timedOut, 'test');
+  assert.equal(result.code, 0, result.stderr);
+  assert.match(result.stdout, /^Slow\/a · 1 skill$/m);
+  assert.equal(result.stderr, 'warning: GitHub code search timed out; some SKILL.md files may be missing');
 });
 
 test("a user's URL: the user's own repositories, with or without GITHUB_TOKEN", async () => {
@@ -193,7 +214,7 @@ test('GITHUB_TOKEN: at most 1000 SKILL.md files from the code search, a warning 
   const recording: Recording = owner('Huge', 'Organization');
   for (let page = 1; page <= 10; page++) {
     const items = Array.from({ length: 100 }, (_, n) => ({ path: `.claude/skills/s${(page - 1) * 100 + n}/SKILL.md`, repository: { full_name: 'Huge/skills' } }));
-    recording[`${API}/search/code?q=filename:SKILL.md+org:Huge&per_page=100&page=${page}`] = { status: 200, body: { total_count: 1500, items } };
+    recording[`${API}/search/code?q=filename:SKILL.md+org:Huge+fork:true&per_page=100&page=${page}`] = { status: 200, body: { total_count: 1500, items } };
   }
   const result = await atlas(['scan', 'https://github.com/Huge'], replay(recording), 'test');
   assert.equal(result.code, 0, result.stderr);
@@ -212,6 +233,30 @@ test('the rate limit → the clear message, the scan stops, exit code 1', async 
   assert.equal(result.code, 1);
   assert.equal(result.stdout, '');
   assert.equal(result.stderr, 'GitHub rate limit reached; set GITHUB_TOKEN');
+});
+
+test('the rate limit: the other repositories being listed finish, no more are asked for', async () => {
+  const repositories = Array.from({ length: 20 }, (_, n) => ({ id: `Busy/r${String(n).padStart(2, '0')}` }));
+  const recording = replay({
+    ...owner('Busy', 'Organization'),
+    ...list(`${API}/orgs/Busy/repos?type=all`, repositories),
+    [`${API}/repos/Busy/r00/git/trees/main?recursive=1`]: { status: 403, body: { message: 'API rate limit exceeded for 192.0.2.1.' } },
+    ...Object.assign({}, ...repositories.slice(1).map(({ id }) => tree(id, []))),
+  });
+  const trees: string[] = [];
+  // The rate limit answers at once; the other trees a little later.
+  const busy: typeof github = async (url, init) => {
+    if (url.includes('/git/trees/')) {
+      trees.push(url);
+      if (!url.includes('/r00/')) await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    return recording(url, init);
+  };
+  const result = await atlas(['scan', 'https://github.com/Busy'], busy);
+  assert.equal(result.stderr, 'GitHub rate limit reached; set GITHUB_TOKEN');
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  // Eight at a time: the first eight, and none after them.
+  assert.equal(trees.length, 8);
 });
 
 test('unknown organization → a clear message, exit code 1', async () => {
@@ -257,7 +302,7 @@ function chooser(html: string) {
 test('web: an organization URL → its id, linked, the number of repositories with skills, and a chooser', async () => {
   const page = await get(`repo=${encodeURIComponent('https://github.com/Acme')}`);
   assert.equal(page.status, 200);
-  assert.match(page.html, /<h2 class="organization"><a href="https:\/\/github.com\/Acme">Acme<\/a> · 2 repositories with skills<\/h2>/);
+  assert.match(page.html, /<h2 class="organization"><a href="https:\/\/github.com\/Acme">Acme<\/a> · 3 repositories with skills<\/h2>/);
   assert.match(page.html, /<ul class="warnings"><li>warning: Acme\/empty: cannot be listed: [^<]*<\/li><\/ul>/);
   assert.deepEqual(chooser(page.html), {
     org: 'https://github.com/Acme',
@@ -265,6 +310,7 @@ test('web: an organization URL → its id, linked, the number of repositories wi
     options: [
       { value: '', text: 'Choose a repository', selected: true },
       { value: 'https://github.com/Acme/agents', text: 'Acme/agents · 1 skill', selected: false },
+      { value: 'https://github.com/Acme/forked', text: 'Acme/forked · 1 skill', selected: false },
       { value: 'https://github.com/Acme/tools', text: 'Acme/tools · 2 skills', selected: false },
     ],
   });
@@ -288,6 +334,14 @@ test('web: choosing a repository → the chooser again, the repository chosen, t
   );
   // The filter keeps the organization: Enter without the script asks for the chooser again.
   assert.match(page.html, /<form class="filter" method="get" action="\/">\n<input type="hidden" name="org" value="https:\/\/github.com\/Acme">/);
+});
+
+test('web: the organization cannot be listed → the chosen repository is still shown, with a warning', async () => {
+  const page = await get(`org=${encodeURIComponent('https://github.com/Nobody')}&repo=${encodeURIComponent('https://github.com/Acme/tools')}`);
+  assert.equal(page.status, 200);
+  assert.equal(chooser(page.html), undefined);
+  assert.match(page.html, /<li>warning: no repository chooser: Organization not found: https:\/\/github.com\/Nobody<\/li>/);
+  assert.match(page.html, /<h2 class="repository"><a href="https:\/\/github.com\/Acme\/tools">Acme\/tools<\/a> · 2 skills/);
 });
 
 test('web: no repository with skills → "No repositories with skills found.", no chooser', async () => {

@@ -40,7 +40,7 @@ export async function openGitHub(input: string, options: GitHubOptions): Promise
   const id = info.full_name;
   const { sha } = await github.json<{ sha: string }>(`${API}/repos/${id}/commits/${encodePath(info.default_branch)}`);
   const warnings: string[] = [];
-  const paths = options.token ? await searchPaths(github, id) : await treePaths(github, id, sha, warnings);
+  const paths = options.token ? await searchPaths(github, id, warnings) : await treePaths(github, id, sha, warnings);
   const [organization, repo] = id.split('/');
   return {
     repository: { id, organization, name: repo, url: `https://github.com/${id}`, commit: sha },
@@ -50,18 +50,32 @@ export async function openGitHub(input: string, options: GitHubOptions): Promise
   };
 }
 
-/** Code search looks at the whole default branch, 100 results a page. */
-async function searchPaths(github: Client, id: string): Promise<string[]> {
-  const paths = new Set<string>(); // pages can repeat a result
-  // GitHub returns at most 1000 results: ten pages.
+/** Code search in one repository: the files named SKILL.md. */
+async function searchPaths(github: Client, id: string, warnings: string[]): Promise<string[]> {
+  return (await search(github, `repo:${id}`, warnings)).map((item) => item.path);
+}
+
+type Found = { path: string; repository: { full_name: string } };
+
+/**
+ * Code search looks at the whole default branch, 100 results a page; GitHub returns at most 1000
+ * results, ten pages, and those found in time when the search times out: a warning for each.
+ */
+async function search(github: Client, qualifiers: string, warnings: string[]): Promise<Found[]> {
+  const found = new Map<string, Found>(); // pages can repeat a result
   for (let page = 1; page <= 10; page++) {
-    const result = await github.json<{ total_count: number; items: { path: string }[] }>(
-      `${API}/search/code?q=filename:SKILL.md+repo:${id}&per_page=100&page=${page}`,
+    const result = await github.json<{ total_count: number; incomplete_results?: boolean; items: Found[] }>(
+      `${API}/search/code?q=filename:SKILL.md+${qualifiers}&per_page=100&page=${page}`,
     );
-    for (const item of result.items) paths.add(item.path);
+    for (const item of result.items) found.set(`${item.repository?.full_name}:${item.path}`, item);
+    if (result.incomplete_results) {
+      warnings.push('GitHub code search timed out; some SKILL.md files may be missing');
+      break;
+    }
     if (result.items.length < 100 || page * 100 >= result.total_count) break;
+    if (page === 10) warnings.push(`GitHub returns at most 1000 SKILL.md files; ${result.total_count - 1000} more were left out`);
   }
-  return [...paths];
+  return [...found.values()];
 }
 
 /** A repository of an organization that has skills, and how many. */
@@ -103,20 +117,14 @@ export async function scanOrganization(input: string, options: GitHubOptions): P
   return { organization: { id: owner.login, url: `https://github.com/${owner.login}` }, repositories, warnings };
 }
 
-/** Code search over the whole organization: the files that may be skills, by repository. */
+/** Code search over the whole organization, forks too: the files that may be skills, by repository. */
 async function searchOrganization(github: Client, qualifier: string, warnings: string[]): Promise<Map<string, string[]>> {
-  const paths = new Map<string, Set<string>>(); // pages can repeat a result
-  for (let page = 1; page <= 10; page++) {
-    const result = await github.json<{ total_count: number; items: { path: string; repository: { full_name: string } }[] }>(
-      `${API}/search/code?q=filename:SKILL.md+${qualifier}&per_page=100&page=${page}`,
-    );
-    for (const { path, repository } of result.items) {
-      paths.set(repository.full_name, (paths.get(repository.full_name) ?? new Set()).add(path));
-    }
-    if (result.items.length < 100 || page * 100 >= result.total_count) break;
-    if (page === 10) warnings.push(`GitHub returns at most 1000 SKILL.md files; ${result.total_count - 1000} more were left out`);
+  const paths = new Map<string, string[]>();
+  // Without `fork:true`, code search leaves out forks, which the trees include.
+  for (const { path, repository } of await search(github, `${qualifier}+fork:true`, warnings)) {
+    paths.set(repository.full_name, [...(paths.get(repository.full_name) ?? []), path]);
   }
-  return new Map([...paths].map(([id, files]) => [id, [...files]]));
+  return paths;
 }
 
 /** Each repository's tree at its default branch, a few at a time: the files that may be skills, by repository. */
@@ -130,14 +138,18 @@ async function organizationTrees(github: Client, list: string, warnings: string[
   // In the listed order, however the requests finish.
   const listed: { paths?: string[]; warnings: string[] }[] = repositories.map(() => ({ warnings: [] }));
   let next = 0;
+  let stopped = false; // once the scan has failed, the other workers take no more repositories
   async function worker() {
-    while (next < repositories.length) {
+    while (!stopped && next < repositories.length) {
       const index = next++;
       const { full_name: id, default_branch: branch } = repositories[index];
       try {
-        listed[index].paths = await treePaths(github, id, encodePath(branch), listed[index].warnings);
+        listed[index].paths = await treePaths(github, id, await treeRef(github, id, branch), listed[index].warnings);
       } catch (error) {
-        if (error instanceof RateLimitError || !(error instanceof AtlasError)) throw error;
+        if (error instanceof RateLimitError || !(error instanceof AtlasError)) {
+          stopped = true;
+          throw error;
+        }
         listed[index].warnings.push(`cannot be listed: ${error.message}; skipped`);
       }
     }
@@ -149,6 +161,15 @@ async function organizationTrees(github: Client, list: string, warnings: string[
     warnings.push(...listed[index].warnings.map((warning) => `${id}: ${warning}`));
   });
   return paths;
+}
+
+/**
+ * The tree takes a branch name as it is, one request less; a name with `/` would read as more of
+ * the path, so it is resolved to its commit first.
+ */
+async function treeRef(github: Client, id: string, branch: string): Promise<string> {
+  if (!branch.includes('/')) return encodeURIComponent(branch);
+  return (await github.json<{ sha: string }>(`${API}/repos/${id}/commits/${encodePath(branch)}`)).sha;
 }
 
 type Tree = { truncated: boolean; tree: { path: string; mode: string; type: string; sha: string }[] };

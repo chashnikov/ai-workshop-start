@@ -44,9 +44,14 @@ export function createWebServer({ open, organization }: WebOptions): Server {
     const org = (organization && url.searchParams.get('org')?.trim()) || '';
     try {
       if (organization && parseGitHubOrganizationUrl(input)) return send(200, page(input, repositories(await organization(input), '')));
-      // Both at once: each one is requests to GitHub.
-      const [listed, scanned] = await Promise.all([org ? organization?.(org) : undefined, open(input).then(scan)]);
-      send(200, page(input, `${listed ? repositories(listed, input) : ''}${result(scanned, input, filter, listed ? listed.organization.url : '')}`));
+      if (org && !parseGitHubOrganizationUrl(org)) throw new AtlasError(`Not a GitHub organization URL: ${org}`);
+      // Both at once: each one is requests to GitHub. If the organization fails, the repository is still shown.
+      const listing = org ? organization!(org).catch((failure: unknown) => (failure instanceof AtlasError ? failure : Promise.reject(failure))) : undefined;
+      const [listed, scanned] = await Promise.all([listing, open(input).then(scan)]);
+      let chooser = '';
+      if (listed instanceof AtlasError) chooser = `<ul class="warnings"><li>warning: no repository chooser: ${escape(listed.message)}</li></ul>\n`;
+      else if (listed) chooser = repositories(listed, input);
+      send(200, page(input, `${chooser}${result(scanned, input, filter, org)}`));
     } catch (failure) {
       if (failure instanceof AtlasError) return send(400, page(input, error(failure.message)));
       send(500, page(input, error(`Unexpected error: ${failure instanceof Error ? failure.message : String(failure)}`)));
