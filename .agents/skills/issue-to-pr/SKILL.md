@@ -7,6 +7,10 @@ description: Create a pull request from an issue.
 
 Read the issue description labeled with `Delegated to AI` and create a pull request for it.
 
+## Updating screenshots
+
+If a pull request is expected to modify the user interface, update the screenshots in `e2e/screenshots`.
+
 ## Sample video
 
 Attach a sample MP4 video to the pull request that shows the change working in the web view.
