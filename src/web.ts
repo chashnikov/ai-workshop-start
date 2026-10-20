@@ -99,6 +99,9 @@ export function createWebServer({ open, organization, now = Date.now }: WebOptio
         // Both at once: each one is requests to GitHub. If the organization fails, the repository is still shown.
         const listing = listed ?? (org ? organization!(org).then((result) => (keep(org, result), result), (failure: unknown) => (failure instanceof AtlasError ? failure : Promise.reject(failure))) : undefined);
         [listed, scanned] = await Promise.all([listing, open(input).then(scan)]);
+        // Kept with the organization: chosen again, it is shown at once.
+        const kept = listed instanceof AtlasError ? undefined : listed?.repositories.find((repository) => same(repository.id, input));
+        if (kept) Object.assign(kept, { result: scanned, skills: scanned.skills.length });
       }
       let chooser = '';
       if (listed instanceof AtlasError) chooser = `<ul class="warnings"><li>warning: no repository chooser: ${escape(listed.message)}</li></ul>\n`;

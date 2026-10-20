@@ -561,6 +561,11 @@ test('web: choosing a repository whose skills could not be read → it is scanne
   assert.ok(!requests.includes(`${API}/users/Half`));
   assert.equal(chooser(chosen.html)?.options.find((option) => option.selected)?.value, 'https://github.com/Half/gone');
   assert.deepEqual([...chosen.html.matchAll(/<span class="name">([^<]*)<\/span>/g)].map(([, name]) => name), ['a']);
+  // Kept with the organization: chosen again, at once.
+  requests.length = 0;
+  const again = await get(`org=${encodeURIComponent('https://github.com/Half')}&repo=${encodeURIComponent('https://github.com/Half/gone')}`);
+  assert.equal(requests.length, 0, requests.join(' '));
+  assert.equal(again.html.replace(/<li>warning: [^<]*<\/li>/g, ''), chosen.html.replace(/<li>warning: [^<]*<\/li>/g, ''));
 });
 
 test('web: an organization is kept for 10 minutes, then scanned again; the organization page always scans', async () => {
