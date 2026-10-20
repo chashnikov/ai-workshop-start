@@ -13,8 +13,9 @@ A **GitHub repository** URL, in the page's form: `GET /?repo=<URL>`
   `also in <paths>` for copies, and its **content**: the SKILL.md after the front matter
 - The *first* skill is selected by default; selecting another is `#skill-<name>`: *no new scan*, no script, a link to share
 - In `<name>`, anything but letters, digits, `_` and `-` is `-`; the same anchor again gets `-2`, `-3`…
+- Selecting a skill keeps the page at the top: the repository stays *in view*
 - No skills → `No skills found.`
-- Narrow screens: the list above the skill
+- Narrow screens: the list above the skill; selecting one scrolls to it
 - Warnings on the page; the scan goes on
 - Repository content is *text*, never markup: it is escaped, shown as written
 ## Errors

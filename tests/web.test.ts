@@ -254,9 +254,16 @@ test('HEAD: the headers only, no scan; another method → 405 with Allow: GET, H
   assert.equal(text(posted.html), 'Only GET is supported');
 });
 
-test('narrow screens: the list above the skill', async () => {
+test('selecting a skill keeps the page at the top: the repository stays in view', async () => {
   const page = await view('github.com/JetBrains/fixture');
-  assert.match(page.html, /@media \(max-width: 48rem\) \{ \.skills \{ grid-template-columns: 1fr; \}/);
+  // The browser scrolls to the selected #anchor less its margin, and never above the page's top.
+  assert.match(page.html, /\.detail \{ scroll-margin-top: 100vh; \}/);
+  assert.ok(page.html.indexOf('<h2 class="repository">') < page.html.indexOf('<div class="skills">'));
+});
+
+test('narrow screens: the list above the skill; selecting one scrolls to it', async () => {
+  const page = await view('github.com/JetBrains/fixture');
+  assert.match(page.html, /@media \(max-width: 48rem\) \{ \.skills \{ grid-template-columns: 1fr; \}.* \.detail \{ scroll-margin-top: 1rem; \} \}/);
   // The list comes first in the page, so in one column it is above the skill.
   assert.ok(page.html.indexOf('<nav class="list">') < page.html.indexOf('<div class="details">'));
 });

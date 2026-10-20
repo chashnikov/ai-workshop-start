@@ -154,6 +154,8 @@ a { color: #0969da; }
 .list .summary { display: block; font-size: .8125rem; color: #59636e; }
 .detail { display: none; border: 1px solid #d0d7de; border-radius: 6px; padding: 0 1rem 1rem; min-width: 0; }
 .detail:target, .details:not(:has(.detail:target)) .detail:first-child { display: block; }
+/* Selecting a skill scrolls to it; a margin taller than the screen keeps the page at the top, the repository in view. */
+.detail { scroll-margin-top: 100vh; }
 .detail h3 { font-size: 1.5rem; }
 .description { margin-top: 0; }
 .link, .copies { font-size: .875rem; margin: .25rem 0; }
@@ -162,5 +164,5 @@ a { color: #0969da; }
 .content.empty { background: none; padding: 0; }
 .warnings { color: #9a6700; }
 .error { color: #d1242f; font-weight: 600; }
-@media (max-width: 48rem) { .skills { grid-template-columns: 1fr; } .list { position: static; max-height: none; } }
+@media (max-width: 48rem) { .skills { grid-template-columns: 1fr; } .list { position: static; max-height: none; } .detail { scroll-margin-top: 1rem; } }
 `;
