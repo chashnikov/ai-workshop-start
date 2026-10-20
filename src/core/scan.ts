@@ -1,5 +1,5 @@
 import { findSkills, type SkillFile } from './find.ts';
-import { AtlasError } from './errors.ts';
+import { AtlasError, RateLimitError } from './errors.ts';
 import { sortSkills, type Repository, type Skill } from './model.ts';
 import { parseSkill } from './parse.ts';
 
@@ -18,11 +18,16 @@ export type Source = {
 
 export type ScanResult = { repository: Repository; skills: Skill[]; warnings: string[] };
 
+export type ScanOptions = {
+  /** Also asks when each skill was last updated: on GitHub, a request per skill. Only the web view shows it. */
+  updated?: boolean;
+};
+
 /** fetch → find → parse. Nothing is stored: the result is all there is. */
-export async function scan(source: Source): Promise<ScanResult> {
+export async function scan(source: Source, { updated = false }: ScanOptions = {}): Promise<ScanResult> {
   const files = findSkills(source.paths);
   // The files are read at the same time: on GitHub, each one is a request.
-  const results = await Promise.all(files.map((file) => readSkill(source, file)));
+  const results = await Promise.all(files.map((file) => readSkill(source, file, updated)));
   // A skill whose last update cannot be read is still a skill: one warning for all of them.
   const unknown = results.flatMap((result) => (result.skill && result.unknown ? [result.unknown] : []));
   const updates = unknown.length
@@ -35,15 +40,21 @@ export async function scan(source: Source): Promise<ScanResult> {
   };
 }
 
-async function readSkill(source: Source, file: SkillFile): Promise<{ skill?: Skill; warning?: string; unknown?: AtlasError }> {
+/**
+ * When the file was last updated, if asked and known. One that cannot be read is not known, but the
+ * rate limit stops the scan, as any other request's does.
+ */
+async function lastUpdate(source: Source, path: string, asked: boolean): Promise<{ time: string; unknown?: AtlasError }> {
+  if (!asked || !source.updated) return { time: '' };
+  return source.updated(path).then(
+    (time) => ({ time }),
+    (error: unknown) => (error instanceof AtlasError && !(error instanceof RateLimitError) ? { time: '', unknown: error } : Promise.reject(error)),
+  );
+}
+
+async function readSkill(source: Source, file: SkillFile, updated: boolean): Promise<{ skill?: Skill; warning?: string; unknown?: AtlasError }> {
   // Both at once: on GitHub, each one is a request.
-  const [bytes, updated] = await Promise.all([
-    source.read(file.path),
-    (source.updated?.(file.path) ?? Promise.resolve('')).catch((error: unknown) => {
-      if (error instanceof AtlasError) return error;
-      throw error;
-    }),
-  ]);
+  const [bytes, { time, unknown }] = await Promise.all([source.read(file.path), lastUpdate(source, file.path, updated)]);
   if (!bytes) return { warning: `${file.path}: listed, but not found at the scanned commit; skipped` };
   const parsed = parseSkill(new TextDecoder().decode(bytes));
   const skill: Skill = {
@@ -54,8 +65,8 @@ async function readSkill(source: Source, file: SkillFile): Promise<{ skill?: Ski
     description: parsed.description,
     body: parsed.body,
     commit: source.repository.commit,
-    updated: typeof updated === 'string' ? updated : '',
+    updated: time,
     copies: file.copies,
   };
-  return { skill, warning: parsed.warning && `${file.path}: ${parsed.warning}`, unknown: typeof updated === 'string' ? undefined : updated };
+  return { skill, warning: parsed.warning && `${file.path}: ${parsed.warning}`, unknown };
 }

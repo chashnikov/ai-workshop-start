@@ -330,7 +330,8 @@ test('reading the skills as the organization is scanned: each repository as a sc
   const progress: string[] = [];
   const result = await scanOrganization('https://github.com/Acme', { fetch: github, read: true, progress: (message) => progress.push(message) });
   const tools = result.repositories.find((repository) => repository.id === 'Acme/tools')!;
-  assert.deepEqual(tools.result, await scan(await openGitHub('https://github.com/Acme/tools', { fetch: github })));
+  // As the web view's scan of it: when each skill was last updated too.
+  assert.deepEqual(tools.result, await scan(await openGitHub('https://github.com/Acme/tools', { fetch: github }), { updated: true }));
   assert.deepEqual(
     result.repositories.map(({ id, skills, result }) => ({ id, skills, names: result?.skills.map((skill) => `${skill.name}@${skill.commit}`) })),
     [
@@ -370,6 +371,25 @@ test('reading the skills: the rate limit stops the reading, not the scan; the li
   assert.equal(result.warnings.at(-1), 'the skills of 2 repositories were not read: GitHub rate limit reached; set GITHUB_TOKEN');
 });
 
+test('reading the skills: the rate limit while the last updates are read stops the reading too; those not read are not kept', async () => {
+  // GitHub's API stops answering once the first commits are asked for; the files are not its API.
+  let limited = false;
+  const fetch: Fetch = async (url, init) => {
+    limited ||= url.includes('/commits?');
+    return limited && url.startsWith(API) ? new Response(JSON.stringify({ message: 'API rate limit exceeded for 192.0.2.1.' }), { status: 403 }) : github(url, init);
+  };
+  const result = await scanOrganization('https://github.com/Acme', { fetch, read: true });
+  assert.deepEqual(
+    result.repositories.map(({ id, result }) => ({ id, read: Boolean(result) })),
+    [
+      { id: 'Acme/agents', read: false },
+      { id: 'Acme/tools', read: false },
+    ],
+  );
+  assert.equal(result.warnings.at(-1), 'the skills of 2 repositories were not read: GitHub rate limit reached; set GITHUB_TOKEN');
+  assert.doesNotMatch(result.warnings.join('\n'), /last update/);
+});
+
 test('reading the skills: a repository whose tree is too large keeps its warning, as a scan of it does', async () => {
   const entries = (items: { path: string; type: string; sha: string }[]) => ({ status: 200, body: { truncated: false, tree: items.map((item) => ({ mode: '100644', ...item })) } });
   const recording: Recording = {
@@ -388,7 +408,7 @@ test('reading the skills: a repository whose tree is too large keeps its warning
   const requests: string[] = [];
   const result = await scanOrganization('https://github.com/Large', { fetch: (url, init) => (requests.push(url), large(url, init)), read: true });
   const mono = result.repositories[0].result!;
-  assert.deepEqual(mono, await scan(await openGitHub('https://github.com/Large/mono', { fetch: large })));
+  assert.deepEqual(mono, await scan(await openGitHub('https://github.com/Large/mono', { fetch: large }), { updated: true }));
   assert.match(mono.warnings[0], /^the tree is too large to list at once; looked only in /);
   // Without a token, the list said the branch: the repository is not asked for again.
   assert.ok(!requests.includes(`${API}/repos/Large/mono`));

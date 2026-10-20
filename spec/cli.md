@@ -10,6 +10,7 @@ build-tools-bump-gradle-api — Bumps the Gradle API…
   https://github.com/JetBrains/kotlin/blob/<commit>/…
 ```
 - Sorted by **name**; the description's *first sentence*
+- Not when each skill was last updated: not asked for, no request for it ([analysis.md](analysis.md#details))
 - `also in <paths>` for copies; warnings go to *stderr*
 ### Organization
 ```

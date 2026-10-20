@@ -10,6 +10,7 @@ import { runInNewContext } from 'node:vm';
 import { openGitHub, type Fetch } from '../src/core/github.ts';
 import { replay, type Recording } from '../src/core/replay.ts';
 import { run } from '../src/commands.ts';
+import { scan } from '../src/core/scan.ts';
 import { createWebServer } from '../src/web.ts';
 import { CLI, COMMIT, EXAMPLE, EXAMPLE_COMMIT, FIXTURE, FIXTURE_UPDATED, fixtureOnGitHub, history, onGitHub } from './helpers.ts';
 
@@ -170,36 +171,69 @@ test('last updated: a time with a zone offset is shown in UTC; no commit → not
   }
 });
 
-test('last updated cannot be read → the skills all the same, without it, and one warning; the rate limit too', async () => {
+/** The page for JetBrains/history, with its skills' commits answered `answer`. */
+async function withHistory(files: Record<string, string>, answer: { status: number; body: unknown }) {
   const id = 'JetBrains/history';
-  const files = {
-    '.claude/skills/a/SKILL.md': '---\nname: a\ndescription: A.\n---\n',
-    '.claude/skills/b/SKILL.md': '---\nname: b\ndescription: B.\n---\n',
-  };
   const recording = onGitHub('history', files);
-  for (const path of Object.keys(files)) {
-    recording[`https://api.github.com/repos/${id}/commits?sha=${COMMIT}&path=${path}&per_page=1`] = {
-      status: 403,
-      body: { message: 'API rate limit exceeded for 192.0.2.1.' },
-    };
-  }
+  for (const path of Object.keys(files)) recording[`https://api.github.com/repos/${id}/commits?sha=${COMMIT}&path=${path}&per_page=1`] = answer;
   const server = createWebServer({ open: (input) => openGitHub(input, { fetch: replay(recording) }) });
   const base = await listen(server);
   try {
     const page = await fetch(`${base}?repo=${encodeURIComponent(`https://github.com/${id}`)}`);
-    const html = await page.text();
-    assert.equal(page.status, 200);
-    assert.deepEqual(items(html).map(({ name, updated }) => ({ name, updated })), [
-      { name: 'a', updated: undefined },
-      { name: 'b', updated: undefined },
-    ]);
-    assert.deepEqual([...html.matchAll(/<li>warning: (.*?)<\/li>/g)].map(([, warning]) => warning), [
-      'the last update of 2 skills cannot be read: GitHub rate limit reached; set GITHUB_TOKEN',
-    ]);
+    return { status: page.status, html: await page.text() };
   } finally {
     server.closeAllConnections();
     server.close();
   }
+}
+
+const warningsOf = (html: string) => [...html.matchAll(/<li>warning: (.*?)<\/li>/g)].map(([, warning]) => text(warning));
+
+test('last updated cannot be read → the skills all the same, without it, and one warning for all of them', async () => {
+  const error = { status: 500, body: { message: 'Server Error' } };
+  const two = await withHistory(
+    {
+      '.claude/skills/a/SKILL.md': '---\nname: a\ndescription: A.\n---\n',
+      '.claude/skills/b/SKILL.md': '---\nname: b\ndescription: B.\n---\n',
+    },
+    error,
+  );
+  assert.equal(two.status, 200);
+  assert.deepEqual(items(two.html).map(({ name, updated }) => ({ name, updated })), [
+    { name: 'a', updated: undefined },
+    { name: 'b', updated: undefined },
+  ]);
+  const commits = `https://api.github.com/repos/JetBrains/history/commits?sha=${COMMIT}&path=.claude/skills/`;
+  assert.equal(warningsOf(two.html).length, 1);
+  assert.match(warningsOf(two.html)[0], new RegExp(`^the last update of 2 skills cannot be read: GitHub answered 500 for ${commits.replace(/[.?]/g, '\\$&')}(a|b)/SKILL\\.md&per_page=1: Server Error$`));
+  const one = await withHistory({ '.claude/skills/a/SKILL.md': '---\nname: a\ndescription: A.\n---\n' }, error);
+  assert.deepEqual(warningsOf(one.html), [`the last update of 1 skill cannot be read: GitHub answered 500 for ${commits}a/SKILL.md&per_page=1: Server Error`]);
+});
+
+test('last updated: the rate limit stops the scan, as any other request\'s does → the clear message, status 400', async () => {
+  const page = await withHistory(
+    { '.claude/skills/a/SKILL.md': '---\nname: a\ndescription: A.\n---\n' },
+    { status: 403, body: { message: 'API rate limit exceeded for 192.0.2.1.' } },
+  );
+  assert.equal(page.status, 400);
+  assert.equal(text(page.html), 'GitHub rate limit reached; set GITHUB_TOKEN');
+});
+
+test('last updated: at most 8 requests for it at the same time', async () => {
+  const files = Object.fromEntries(Array.from({ length: 30 }, (_, n) => [`.claude/skills/s${n}/SKILL.md`, `---\nname: s${n}\n---\n`]));
+  const recorded = replay(onGitHub('many', files));
+  let running = 0;
+  let most = 0;
+  const fetch: Fetch = async (url, init) => {
+    if (!url.includes('/commits?')) return recorded(url, init);
+    most = Math.max(most, ++running);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    running--;
+    return recorded(url, init);
+  };
+  const result = await scan(await openGitHub('https://github.com/JetBrains/many', { fetch }), { updated: true });
+  assert.equal(result.skills.filter((skill) => skill.updated).length, 30);
+  assert.equal(most, 8);
 });
 
 test('./fixture on GitHub: in the right column, each skill in full: description, pinned link, copies, content', async () => {
