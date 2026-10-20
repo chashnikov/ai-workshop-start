@@ -37,6 +37,7 @@ async function readSkill(source: Source, file: SkillFile): Promise<{ skill?: Ski
     path: file.path,
     name: parsed.name ?? file.name,
     description: parsed.description,
+    body: parsed.body,
     commit: source.repository.commit,
     copies: file.copies,
   };

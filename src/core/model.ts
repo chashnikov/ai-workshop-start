@@ -18,6 +18,8 @@ export type Skill = {
   path: string;
   name: string;
   description: string;
+  /** The SKILL.md content: the Markdown after the front matter. */
+  body: string;
   /** The scanned commit, the one the link pins; empty for a local directory. */
   commit: string;
   /** The same skill in other agents' folders. */

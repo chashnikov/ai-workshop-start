@@ -1,5 +1,6 @@
 # Command line
 `./skill-atlas scan <GitHub URL | directory>`
+`./skill-atlas serve [--port <port>]`: the web view, [web.md](web.md)
 Prints the result **at once**; *nothing is stored*.
 `GITHUB_TOKEN`, optional: a higher GitHub rate limit.
 ## Output
