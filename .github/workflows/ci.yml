@@ -23,7 +23,16 @@ jobs:
       - run: npm run typecheck
       # Headless Chromium for the demo video's test (tests/demo.test.ts): in CI it must run, not skip.
       - run: npx playwright install --with-deps --only-shell chromium
+      # The tests, and the demo's screenshot test (e2e/demo.spec.ts), against the screenshots in e2e/screenshots/.
       - run: npm test
+      # A screenshot that does not match: the actual one, the expected one and their diff.
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: screenshots-diff
+          path: |
+            test-results/
+            playwright-report/
       # The real CLI on the fixture repository, as a user would run it: it must exit 0.
       - name: Smoke test
         run: |

@@ -1,21 +1,14 @@
 #!/usr/bin/env node
 // `npm run demo [-- --out <file>]`: a video of the web view, an organization's chooser then the filter,
 // recorded in a headless browser, so it works where there is no display: a remote machine, a container,
-// CI. ./fixture is served as if it were on GitHub, in an organization, as in the tests
-// (src/core/fixture.ts): no network, no token.
-import { once } from 'node:events';
+// CI. The demo itself, and the fixture organization it is played on, are in ./demo.ts.
 import { mkdir, rm } from 'node:fs/promises';
-import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { chromium, type Page } from 'playwright';
-import { organizationOnGitHub } from '../src/core/fixture.ts';
-import { openGitHub, scanOrganization } from '../src/core/github.ts';
-import { replay } from '../src/core/replay.ts';
-import { createWebServer } from '../src/web.ts';
+import { filterField, playDemo, SIZE, startDemoServer, type Step } from './demo.ts';
 
 const usage = 'Usage: npm run demo [-- --out <file.webm>]';
-const SIZE = { width: 1280, height: 720 };
 /** Between the keys, and on each step: slow enough to follow. */
 const KEY_DELAY = 250;
 const PAUSE = 1500;
@@ -41,21 +34,13 @@ if (args.length !== 0 && (args.length !== 2 || args[0] !== '--out' || !args[1].e
 }
 const out = resolve(args[1] ?? 'recordings/filter.webm');
 
-const github = replay(organizationOnGitHub());
-const server = createWebServer({
-  open: (input) => openGitHub(input, { fetch: github }),
-  organization: (input, { read, progress } = {}) => scanOrganization(input, { fetch: github, read, progress }),
-});
-server.listen(0, '127.0.0.1');
-await once(server, 'listening');
-const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
-
+const server = await startDemoServer();
 const videos = join(tmpdir(), `skill-atlas-demo-${process.pid}`);
 let browser;
 try {
   browser = await chromium.launch();
 } catch (error) {
-  server.close();
+  await server.close();
   console.error(`Cannot start the headless browser: ${error instanceof Error ? error.message.split('\n')[0] : String(error)}
 Install it with: npx playwright install --only-shell chromium   (add --with-deps for the system libraries, as root)`);
   process.exit(1);
@@ -63,26 +48,7 @@ Install it with: npx playwright install --only-shell chromium   (add --with-deps
 try {
   const context = await browser.newContext({ viewport: SIZE, recordVideo: { dir: videos, size: SIZE } });
   const page = await context.newPage();
-  await page.goto(base);
-  await page.getByRole('textbox', { name: 'GitHub repository or organization URL' }).pressSequentially('https://github.com/JetBrains', { delay: KEY_DELAY / 4 });
-  await page.keyboard.press('Enter');
-  await page.waitForURL(/\?repo=/);
-  await step(page, 'A whole organization: its repositories with skills');
-  await page.getByRole('combobox', { name: 'Repository' }).selectOption({ label: 'JetBrains/fixture · 4 skills' });
-  await page.locator('.chooser').getByRole('button', { name: 'Show skills' }).click();
-  await page.waitForURL(/&repo=/);
-  await step(page, 'Choose one: its skills, the chooser stays on top');
-  await type(page, 'co');
-  await step(page, 'Filter as you type: names that contain “co”');
-  await page.locator('.list li:not([hidden]) a').nth(1).click();
-  await step(page, 'Select a matching skill');
-  await type(page, ' st');
-  await step(page, 'Several words: names that contain every one');
-  await filterField(page).fill('');
-  await type(page, 'zzz');
-  await step(page, 'No skill matches');
-  await filterField(page).fill('');
-  await step(page, 'Empty: every skill again');
+  await playDemo(page, server.base, step, KEY_DELAY);
   const video = page.video()!;
   await context.close();
   await mkdir(dirname(out), { recursive: true });
@@ -90,20 +56,15 @@ try {
   console.log(`Recorded: ${out}`);
 } finally {
   await browser.close();
-  server.close();
+  await server.close();
   await rm(videos, { recursive: true, force: true });
-}
-
-async function type(page: Page, text: string) {
-  await filterField(page).press('End');
-  await filterField(page).pressSequentially(text, { delay: KEY_DELAY });
 }
 
 /**
  * A caption over the page, with the address that keeps the words; printed: the skills shown and the
  * address's anchor, or, on an organization's page, its heading and the chooser's repositories.
  */
-async function step(page: Page, caption: string) {
+async function step(page: Page, { caption }: Step) {
   await page.evaluate(`(${CAPTION})(${JSON.stringify(caption)})`);
   if (!(await filterField(page).count())) {
     const heading = await page.locator('h2.organization').textContent();
@@ -117,8 +78,4 @@ async function step(page: Page, caption: string) {
   const anchor = new URL(page.url()).hash || 'no anchor';
   console.log(`${caption} | “${filter}” → ${shown.join(', ') || 'No skills match'} | ${anchor}`);
   await page.waitForTimeout(PAUSE);
-}
-
-function filterField(page: Page) {
-  return page.getByRole('searchbox', { name: 'Filter skills by name' });
 }

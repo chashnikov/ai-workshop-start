@@ -26,7 +26,8 @@ $ npm run demo
 Recorded: …/recordings/filter.webm
 ```
 
-Set `GITHUB_TOKEN` for a higher GitHub rate limit. `npm test` runs the tests.
+Set `GITHUB_TOKEN` for a higher GitHub rate limit. `npm test` runs the tests, and the demo as a screenshot test:
+each key moment compared with its screenshot in [e2e/screenshots/](e2e/screenshots/).
 
 - [spec/](spec/): what it does. [AGENTS.md](AGENTS.md): the definition of done.
 - [fixture/](fixture/README.md): a small repository for the tests.
