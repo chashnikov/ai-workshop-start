@@ -12,7 +12,8 @@ import { openGitHub } from '../src/core/github.ts';
 import { parseSkill } from '../src/core/parse.ts';
 import { replay } from '../src/core/replay.ts';
 import { scan } from '../src/core/scan.ts';
-import { atlas, CLI, EXAMPLE_COMMIT, FIXTURE } from './helpers.ts';
+import { openDirectory } from '../src/local.ts';
+import { atlas, CLI, EXAMPLE_COMMIT, FIXTURE, history } from './helpers.ts';
 
 const fixture = await atlas(['scan', FIXTURE]);
 const example = await atlas(['scan', 'github.com/JetBrains/example']);
@@ -103,16 +104,30 @@ test('GitHub: only skill files are skills, and the same name in different roots 
     [`${raw}/.claude/skills/review/SKILL.md`]: skill('review'),
     [`${raw}/agent/skills/review/SKILL.md`]: skill('review'),
     [`${raw}/.github/skills/testing/SKILL.md`]: skill('testing'),
+    // When each skill was last updated: its own file's; its copies' are not asked for.
+    ...history('JetBrains/skills', commit, '.agents/skills/review/SKILL.md', '2026-10-20T15:05:21Z'),
+    ...history('JetBrains/skills', commit, '.github/skills/testing/SKILL.md', '2026-09-14T08:12:45Z'),
   });
   const result = await scan(await openGitHub('https://github.com/JetBrains/skills', { fetch: github }));
   assert.deepEqual(result.warnings, []);
   assert.deepEqual(
-    result.skills.map(({ name, path, copies }) => ({ name, path, copies })),
+    result.skills.map(({ name, path, copies, updated }) => ({ name, path, copies, updated })),
     [
-      { name: 'review', path: '.agents/skills/review/SKILL.md', copies: ['.claude/skills/review/SKILL.md', 'agent/skills/review/SKILL.md'] },
-      { name: 'testing', path: '.github/skills/testing/SKILL.md', copies: [] },
+      {
+        name: 'review',
+        path: '.agents/skills/review/SKILL.md',
+        copies: ['.claude/skills/review/SKILL.md', 'agent/skills/review/SKILL.md'],
+        updated: '2026-10-20T15:05:21Z',
+      },
+      { name: 'testing', path: '.github/skills/testing/SKILL.md', copies: [], updated: '2026-09-14T08:12:45Z' },
     ],
   );
+});
+
+test('a local directory: no commit, so no last update; nothing asked for', async () => {
+  const result = await scan(await openDirectory(FIXTURE));
+  assert.deepEqual(result.skills.map((skill) => skill.updated), ['', '', '', '']);
+  assert.doesNotMatch(result.warnings.join('\n'), /last update/);
 });
 
 test('the CLI prints the result at once and stores nothing', (t) => {

@@ -11,7 +11,7 @@ import { openGitHub, type Fetch } from '../src/core/github.ts';
 import { replay, type Recording } from '../src/core/replay.ts';
 import { run } from '../src/commands.ts';
 import { createWebServer } from '../src/web.ts';
-import { CLI, COMMIT, EXAMPLE, EXAMPLE_COMMIT, FIXTURE, fixtureOnGitHub, onGitHub } from './helpers.ts';
+import { CLI, COMMIT, EXAMPLE, EXAMPLE_COMMIT, FIXTURE, FIXTURE_UPDATED, fixtureOnGitHub, history, onGitHub } from './helpers.ts';
 
 /** A skill whose front matter and content are markup. */
 const MARKUP = onGitHub('markup', {
@@ -90,12 +90,18 @@ test('a repository: its id, linked, the commit, and its skill with its descripti
   assert.match(page.html, /<pre class="content"># Commits<\/pre>/);
 });
 
+/** The left column's items: each skill's anchor, name, summary and when it was last updated; the `hidden` ones too with `all`. */
+function items(html: string, all = false) {
+  const nav = /<nav class="list">([\s\S]*?)<\/nav>/.exec(html)?.[1] ?? '';
+  const item = /<li( hidden)?><a href="#([^"]+)"><span class="name">(.*?)<\/span>(?:<span class="summary">(.*?)<\/span>)?(?:<time class="updated" datetime="([^"]*)">(.*?)<\/time>)?<\/a><\/li>/g;
+  return [...nav.matchAll(item)]
+    .filter(([, hidden]) => all || !hidden)
+    .map(([, , anchor, name, summary, datetime, updated]) => ({ anchor, name, summary, datetime, updated }));
+}
+
 /** The left column: each skill's anchor, name and summary; the `hidden` ones too with `all`. */
 function list(html: string, all = false) {
-  const nav = /<nav class="list">([\s\S]*?)<\/nav>/.exec(html)?.[1] ?? '';
-  return [...nav.matchAll(/<li( hidden)?><a href="#([^"]+)"><span class="name">(.*?)<\/span>(?:<span class="summary">(.*?)<\/span>)?<\/a><\/li>/g)]
-    .filter(([, hidden]) => all || !hidden)
-    .map(([, , anchor, name, summary]) => ({ anchor, name, summary }));
+  return items(html, all).map(({ anchor, name, summary }) => ({ anchor, name, summary }));
 }
 
 /** The right column: each skill's section, by anchor; the `hidden` ones too with `all`. */
@@ -119,6 +125,81 @@ test('./fixture on GitHub: the skills, sorted by name, in the left column, with 
   ]);
   assert.match(page.html, /<li>warning: .agents\/skills\/release-checklist\/SKILL.md: malformed front matter: [^<]*<\/li>/);
   assert.doesNotMatch(page.html, /not-a-skill/);
+});
+
+test('./fixture on GitHub: each skill in the list shows the date and time it was last updated, in UTC', async () => {
+  const page = await view('github.com/JetBrains/fixture');
+  assert.deepEqual(items(page.html).map(({ name, datetime, updated }) => ({ name, datetime, updated })), [
+    { name: 'code-style', datetime: '2026-09-14T08:12:45.000Z', updated: 'Updated 2026-09-14 08:12 UTC' },
+    { name: 'commits', datetime: '2026-10-20T15:05:21.000Z', updated: 'Updated 2026-10-20 15:05 UTC' },
+    { name: 'release-checklist', datetime: '2026-03-02T23:59:59.000Z', updated: 'Updated 2026-03-02 23:59 UTC' },
+    { name: 'testing', datetime: '2025-12-31T07:00:00.000Z', updated: 'Updated 2025-12-31 07:00 UTC' },
+  ]);
+});
+
+test('last updated: the last commit to the SKILL.md up to the scanned commit, a request per skill, a copy not asked for', async () => {
+  requests.length = 0;
+  await view('github.com/JetBrains/fixture');
+  const asked = requests.filter((url) => url.startsWith('https://api.github.com/repos/JetBrains/fixture/commits?'));
+  assert.deepEqual(asked.sort(), Object.keys(FIXTURE_UPDATED).map((path) => `https://api.github.com/repos/JetBrains/fixture/commits?sha=${COMMIT}&path=${path}&per_page=1`).sort());
+});
+
+test('last updated: a time with a zone offset is shown in UTC; no commit → nothing shown', async () => {
+  const id = 'JetBrains/history';
+  const files = {
+    '.claude/skills/offset/SKILL.md': '---\nname: offset\ndescription: An offset.\n---\n',
+    '.claude/skills/none/SKILL.md': '---\nname: none\ndescription: No commit.\n---\n',
+  };
+  const github = replay({
+    ...onGitHub('history', files),
+    ...history(id, COMMIT, '.claude/skills/offset/SKILL.md', '2026-10-20T23:30:00+02:00'),
+    [`https://api.github.com/repos/${id}/commits?sha=${COMMIT}&path=.claude/skills/none/SKILL.md&per_page=1`]: { status: 200, body: [] },
+  });
+  const server = createWebServer({ open: (input) => openGitHub(input, { fetch: github }) });
+  const base = await listen(server);
+  try {
+    const html = await (await fetch(`${base}?repo=${encodeURIComponent(`https://github.com/${id}`)}`)).text();
+    assert.deepEqual(items(html).map(({ name, updated }) => ({ name, updated })), [
+      { name: 'none', updated: undefined },
+      { name: 'offset', updated: 'Updated 2026-10-20 21:30 UTC' },
+    ]);
+    assert.doesNotMatch(html, /<li>warning: /);
+  } finally {
+    server.closeAllConnections();
+    server.close();
+  }
+});
+
+test('last updated cannot be read → the skills all the same, without it, and one warning; the rate limit too', async () => {
+  const id = 'JetBrains/history';
+  const files = {
+    '.claude/skills/a/SKILL.md': '---\nname: a\ndescription: A.\n---\n',
+    '.claude/skills/b/SKILL.md': '---\nname: b\ndescription: B.\n---\n',
+  };
+  const recording = onGitHub('history', files);
+  for (const path of Object.keys(files)) {
+    recording[`https://api.github.com/repos/${id}/commits?sha=${COMMIT}&path=${path}&per_page=1`] = {
+      status: 403,
+      body: { message: 'API rate limit exceeded for 192.0.2.1.' },
+    };
+  }
+  const server = createWebServer({ open: (input) => openGitHub(input, { fetch: replay(recording) }) });
+  const base = await listen(server);
+  try {
+    const page = await fetch(`${base}?repo=${encodeURIComponent(`https://github.com/${id}`)}`);
+    const html = await page.text();
+    assert.equal(page.status, 200);
+    assert.deepEqual(items(html).map(({ name, updated }) => ({ name, updated })), [
+      { name: 'a', updated: undefined },
+      { name: 'b', updated: undefined },
+    ]);
+    assert.deepEqual([...html.matchAll(/<li>warning: (.*?)<\/li>/g)].map(([, warning]) => warning), [
+      'the last update of 2 skills cannot be read: GitHub rate limit reached; set GITHUB_TOKEN',
+    ]);
+  } finally {
+    server.closeAllConnections();
+    server.close();
+  }
 });
 
 test('./fixture on GitHub: in the right column, each skill in full: description, pinned link, copies, content', async () => {

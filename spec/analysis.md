@@ -5,11 +5,15 @@ A **GitHub repository** URL, or a local directory; or a **GitHub organization** 
 Every `SKILL.md`: **name**, **description**, **link**, **content**
 ## Architecture
 Core: fetch → find → parse. CLI and web view ([web.md](web.md)): *thin clients*.
-Skill: id = `repo:path`, name, description, body, commit
+Skill: id = `repo:path`, name, description, body, commit, **last updated**
 ## Details
 - **GitHub API**, no clone; *under 5 s* for intellij-community
 - The name: front matter, else the directory
 - The link pins the *scanned commit*
+- **Last updated**: the time of the last commit to the skill's SKILL.md, up to the scanned commit; its copies' are not asked for
+  - GitHub: a request per skill, `commits?sha=<commit>&path=<path>&per_page=1`; a local directory: none, not known
+  - It cannot be read, the rate limit say → not known, *one warning*: `the last update of N skills cannot be read: <message>`;
+    the scan goes on
 - Malformed front matter → a *warning*, the scan goes on
 - Unreachable repository → a clear message, exit code 1
 ## Skill definition

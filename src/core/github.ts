@@ -57,6 +57,13 @@ function source(github: Client, id: string, sha: string, paths: string[], warnin
     paths,
     warnings,
     read: (path) => github.raw(`${RAW}/${id}/${sha}/${encodePath(path)}`),
+    // The last commit to the file, up to the scanned one: a request per skill.
+    async updated(path) {
+      const commits = await github.json<{ commit: { committer: { date: string } } }[]>(
+        `${API}/repos/${id}/commits?sha=${sha}&path=${encodePath(path)}&per_page=1`,
+      );
+      return commits[0]?.commit.committer.date ?? '';
+    },
   };
 }
 

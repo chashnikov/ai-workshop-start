@@ -7,6 +7,7 @@ import type { AddressInfo } from 'node:net';
 import { after, test } from 'node:test';
 import { run } from '../src/commands.ts';
 import { openGitHub, parseGitHubOrganizationUrl, parseGitHubUrl, scanOrganization, type Fetch } from '../src/core/github.ts';
+import { history } from '../src/core/fixture.ts';
 import { replay, type Recording } from '../src/core/replay.ts';
 import { scan } from '../src/core/scan.ts';
 import { createWebServer } from '../src/web.ts';
@@ -53,6 +54,7 @@ function repository(id: string, files: Record<string, string>, branch = 'main'):
   };
   for (const [path, body] of Object.entries(files)) {
     recording[`https://raw.githubusercontent.com/${id}/${COMMIT}/${path}`] = { status: 200, body };
+    Object.assign(recording, history(id, COMMIT, path, '2026-10-01T12:00:00Z'));
   }
   return recording;
 }
@@ -533,6 +535,8 @@ test('web: choosing a repository of an organization just scanned → its skills 
   assert.equal(chooser(page.html)?.options.find((option) => option.selected)?.value, 'https://github.com/Acme/tools');
   assert.deepEqual([...page.html.matchAll(/<span class="name">([^<]*)<\/span>/g)].map(([, name]) => name), ['review', 'testing']);
   assert.ok(page.html.includes(`https://github.com/Acme/tools/blob/${COMMIT}/.agents/skills/review/SKILL.md`));
+  // When each one was last updated: read with the organization, kept with it.
+  assert.equal([...page.html.matchAll(/<time class="updated" datetime="2026-10-01T12:00:00.000Z">Updated 2026-10-01 12:00 UTC<\/time>/g)].length, 2);
   // With a filter, sent with Enter without the script: at once too.
   await get(`${chosen}&filter=test`);
   assert.equal(requests.length, 0, requests.join(" "));

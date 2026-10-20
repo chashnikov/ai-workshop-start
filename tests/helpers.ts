@@ -2,10 +2,11 @@
 import { fileURLToPath } from 'node:url';
 import { run } from '../src/commands.ts';
 import { openGitHub, parseGitHubUrl } from '../src/core/github.ts';
+import { history } from '../src/core/fixture.ts';
 import { replay, type Recording } from '../src/core/replay.ts';
 import { openDirectory } from '../src/local.ts';
 
-export { COMMIT, FIXTURE, fixtureOnGitHub, onGitHub } from '../src/core/fixture.ts';
+export { COMMIT, FIXTURE, FIXTURE_UPDATED, fixtureOnGitHub, history, onGitHub, UPDATED } from '../src/core/fixture.ts';
 export const CLI = fileURLToPath(new URL('../src/cli.ts', import.meta.url));
 
 /** The commit GitHub answers for JetBrains/example. */
@@ -23,6 +24,7 @@ export const EXAMPLE: Recording = {
     status: 200,
     body: '---\nname: commits\ndescription: Write commit messages the way this repository does. Use for every commit.\n---\n# Commits\n',
   },
+  ...history('JetBrains/example', EXAMPLE_COMMIT, '.claude/skills/commits/SKILL.md', '2026-10-20T15:05:21Z'),
 };
 
 const github = replay(EXAMPLE);

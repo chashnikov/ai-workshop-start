@@ -9,7 +9,8 @@ A **GitHub repository** URL, in the page's form: `GET /?repo=<URL>`
   `GITHUB_TOKEN` as for the CLI
 ## Output
 `<owner>/<repo> · N skills`, linked to the repository, with the scanned commit
-- **Master-detail**: the skills in a *left column*, sorted by **name**: name and the description's *first sentence*;
+- **Master-detail**: the skills in a *left column*, sorted by **name**: name, the description's *first sentence*, and when it
+  was **last updated** ([analysis.md](analysis.md#details)): `Updated 2026-10-20 15:05 UTC`, in *UTC*, no script; nothing when not known;
   the *selected* skill on the right: name, the *whole* description, the link pinned to the commit,
   `also in <paths>` for copies, and its **content**: the SKILL.md after the front matter
 - The *first* skill is selected by default; selecting another is `#skill-<name>`: *no new scan*, no script (CSS), a link to share
@@ -42,7 +43,7 @@ A **GitHub organization** URL in the same form: `GET /?repo=<organization URL>`,
   - Kept *10 minutes*, the *10* organizations scanned last; the organization's page always scans again
   - Not kept → listed, *not read*, kept again, and the repository scanned, as before: the others are read as they are
     chosen; without `GITHUB_TOKEN`, a request per repository of the organization; with it, two code searches or more
-    (10 a minute)
+    (10 a minute); and when each skill was last updated, a request per skill
   - Kept, but a repository without its skills read, or not in it → only the repository scanned, *no new listing*;
     one of its repositories is kept with it, shown at once when chosen again; the organization's warnings stay those
     of its scan
