@@ -23,7 +23,7 @@ process.exitCode = await run(process.argv.slice(2), {
     const server = createWebServer({
       open: (input) => openGitHub(input, { fetch, token }),
       // Read as the organization is listed: choosing a repository shows its skills at once.
-      organization: (input, progress) => scanOrganization(input, { fetch, token, read: true, progress }),
+      organization: (input, { read, progress } = {}) => scanOrganization(input, { fetch, token, read, progress }),
     });
     server.listen(port, '127.0.0.1');
     try {

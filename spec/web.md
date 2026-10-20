@@ -40,8 +40,9 @@ A **GitHub organization** URL in the same form: `GET /?repo=<organization URL>`,
 - Scanning the organization reads every repository's skills too, as a scan of it does, and **keeps** them, in memory:
   choosing a repository then shows its skills **at once**, *no request* to GitHub, the filter too; as they were scanned
   - Kept *10 minutes*, the *10* organizations scanned last; the organization's page always scans again
-  - Not kept → listed, kept again, and the repository scanned, as before; without `GITHUB_TOKEN`, a request per
-    repository of the organization; with it, two code searches or more (10 a minute)
+  - Not kept → listed, *not read*, kept again, and the repository scanned, as before: the others are read as they are
+    chosen; without `GITHUB_TOKEN`, a request per repository of the organization; with it, two code searches or more
+    (10 a minute)
   - Kept, but a repository without its skills read, or not in it → only the repository scanned, *no new listing*;
     one of its repositories is kept with it, shown at once when chosen again; the organization's warnings stay those
     of its scan

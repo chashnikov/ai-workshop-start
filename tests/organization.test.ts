@@ -421,7 +421,7 @@ const counted: Fetch = (url, init) => (requests.push(url), github(url, init));
 let clock = 0;
 const server = createWebServer({
   open: (input) => openGitHub(input, { fetch: counted }),
-  organization: (input, progress) => scanOrganization(input, { fetch: counted, read: true, progress }),
+  organization: (input, options) => scanOrganization(input, { fetch: counted, ...options }),
   now: () => clock,
 });
 server.listen(0, '127.0.0.1');
@@ -472,7 +472,8 @@ test('web: an organization URL → its id, linked, the number of repositories wi
 });
 
 test('web: choosing a repository → the chooser again, the repository chosen, then its skills', async () => {
-  clock += 60 * 60 * 1000; // the organization is no longer kept: scanned again
+  clock += 60 * 60 * 1000; // the organization is no longer kept: listed again
+  requests.length = 0;
   const page = await get(`org=${encodeURIComponent('https://github.com/Acme')}&repo=${encodeURIComponent('https://github.com/Acme/tools')}`);
   assert.equal(page.status, 200);
   const chosen = chooser(page.html);
@@ -488,6 +489,19 @@ test('web: choosing a repository → the chooser again, the repository chosen, t
   );
   // The filter keeps the organization: Enter without the script asks for the chooser again.
   assert.match(page.html, /<form class="filter" method="get" action="\/">\n<input type="hidden" name="org" value="https:\/\/github.com\/Acme">/);
+  // Listed, not read: only the chosen repository's files, and none of the others'.
+  assert.ok(requests.includes(`${API}/users/Acme`));
+  const files = requests.filter((url) => url.startsWith('https://raw.githubusercontent.com/'));
+  assert.deepEqual(files.sort(), [
+    `https://raw.githubusercontent.com/Acme/tools/${COMMIT}/.agents/skills/review/SKILL.md`,
+    `https://raw.githubusercontent.com/Acme/tools/${COMMIT}/.github/skills/testing/SKILL.md`,
+  ]);
+  // Another one, chosen then: scanned, the organization not listed again.
+  requests.length = 0;
+  const other = await get(`org=${encodeURIComponent('https://github.com/Acme')}&repo=${encodeURIComponent('https://github.com/Acme/forked')}`);
+  assert.deepEqual([...other.html.matchAll(/<span class="name">([^<]*)<\/span>/g)].map(([, name]) => name), ['upstream']);
+  assert.ok(requests.includes(`${API}/repos/Acme/forked`));
+  assert.ok(!requests.includes(`${API}/users/Acme`));
 });
 
 test('web: the organization cannot be listed → the chosen repository is still shown, with a warning', async () => {
@@ -504,8 +518,8 @@ test('web: the organization page shows the progress as it loads, then only what 
   const held = new Promise<void>((resolve) => (release = resolve));
   const slow = createWebServer({
     open: (input) => openGitHub(input, { fetch: github }),
-    organization: (input, progress) =>
-      scanOrganization(input, { fetch: async (url, init) => (url.includes('Acme/tools/git/trees') && (await held), github(url, init)), read: true, progress }),
+    organization: (input, options) =>
+      scanOrganization(input, { fetch: async (url, init) => (url.includes('Acme/tools/git/trees') && (await held), github(url, init)), ...options }),
   });
   slow.listen(0, '127.0.0.1');
   await once(slow, 'listening');
@@ -603,7 +617,7 @@ test('web: at most the 10 organizations scanned last are kept', async () => {
   const asked: string[] = [];
   const kept = createWebServer({
     open: (input) => openGitHub(input, { fetch: many }),
-    organization: (input, progress) => scanOrganization(input, { fetch: (url, init) => (asked.push(url), many(url, init)), read: true, progress }),
+    organization: (input, options) => scanOrganization(input, { fetch: (url, init) => (asked.push(url), many(url, init)), ...options }),
   });
   kept.listen(0, '127.0.0.1');
   await once(kept, 'listening');
@@ -621,11 +635,11 @@ test('web: the rate limit while the skills are read → the chooser all the same
   let reading = false;
   const limited = createWebServer({
     open: (input) => openGitHub(input, { fetch: github }),
-    organization: (input, progress) =>
+    organization: (input, options) =>
       scanOrganization(input, {
         fetch: async (url, init) => (reading ? new Response(JSON.stringify({ message: 'API rate limit exceeded' }), { status: 403 }) : github(url, init)),
-        read: true,
-        progress: (message) => ((reading ||= message.startsWith('Read the skills')), progress?.(message)),
+        read: options?.read,
+        progress: (message) => ((reading ||= message.startsWith('Read the skills')), options?.progress?.(message)),
       }),
   });
   limited.listen(0, '127.0.0.1');

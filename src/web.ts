@@ -12,9 +12,9 @@ export type WebOptions = {
   open(input: string): Promise<Source>;
   /**
    * Lists the repositories with skills of the organization the page asks for, telling `progress` how
-   * it goes; with their skills read, choosing one of them shows its skills with no new scan.
+   * it goes; with `read`, their skills too, so that choosing one of them shows its skills with no new scan.
    */
-  organization?(input: string, progress?: (message: string) => void): Promise<OrganizationResult>;
+  organization?(input: string, options?: { read?: boolean; progress?(message: string): void }): Promise<OrganizationResult>;
   /** The time, in milliseconds: when a kept organization is too old. `Date.now` by default. */
   now?(): number;
 };
@@ -81,7 +81,7 @@ export function createWebServer({ open, organization, now = Date.now }: WebOptio
         };
         let content: string;
         try {
-          const listed = await organization(input, progress);
+          const listed = await organization(input, { read: true, progress });
           keep(input, listed);
           content = repositories(listed, '');
         } catch (failure) {
@@ -97,7 +97,8 @@ export function createWebServer({ open, organization, now = Date.now }: WebOptio
       let scanned = listed?.repositories.find((repository) => same(repository.id, input))?.result;
       if (!scanned) {
         // Both at once: each one is requests to GitHub. If the organization fails, the repository is still shown.
-        const listing = listed ?? (org ? organization!(org).then((result) => (keep(org, result), result), (failure: unknown) => (failure instanceof AtlasError ? failure : Promise.reject(failure))) : undefined);
+        // Only listed, not read: the others are read as they are chosen.
+        const listing = listed ?? (org ? organization!(org, { read: false }).then((result) => (keep(org, result), result), (failure: unknown) => (failure instanceof AtlasError ? failure : Promise.reject(failure))) : undefined);
         [listed, scanned] = await Promise.all([listing, open(input).then(scan)]);
         // Kept with the organization: chosen again, it is shown at once.
         const kept = listed instanceof AtlasError ? undefined : listed?.repositories.find((repository) => same(repository.id, input));
