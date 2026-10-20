@@ -1,21 +1,50 @@
 // The web view: a page that takes a GitHub repository URL and shows its skills and their content.
-// A thin client like the CLI: it scans on every request and stores nothing.
+// A thin client like the CLI: it scans on every request and stores nothing, but the organizations
+// scanned lately, so that choosing one of their repositories shows its skills at once.
 import { createServer, type Server } from 'node:http';
 import { AtlasError } from './core/errors.ts';
+import { parseGitHubOrganizationUrl, parseGitHubUrl, type OrganizationResult } from './core/github.ts';
 import { firstSentence, skillLink, type Repository, type Skill } from './core/model.ts';
 import { scan, type ScanResult, type Source } from './core/scan.ts';
 
 export type WebOptions = {
   /** Opens the repository the page asks for. */
   open(input: string): Promise<Source>;
+  /**
+   * Lists the repositories with skills of the organization the page asks for, telling `progress` how
+   * it goes; with `read`, their skills too, so that choosing one of them shows its skills with no new scan.
+   */
+  organization?(input: string, options?: { read?: boolean; progress?(message: string): void }): Promise<OrganizationResult>;
+  /** The time, in milliseconds: when a kept organization is too old. `Date.now` by default. */
+  now?(): number;
 };
+
+/** How long a scanned organization is kept, and how many of them at most. */
+const KEPT_FOR = 10 * 60 * 1000;
+const KEPT = 10;
 
 /**
  * `GET /` is the form; `GET /?repo=<URL>` is the form and the repository's skills; `&filter=<words>`
  * only the skills whose names contain every word (the page's script then filters as the words are typed).
+ * `GET /?repo=<organization URL>` is a chooser of its repositories with skills; it chooses with
+ * `?org=<organization URL>&repo=<URL>`: the chooser again, then the repository's skills, from the
+ * organization as it was scanned if it is kept. The organization's page shows the scan's progress as it loads.
  * Only for this machine's own addresses: a page elsewhere must not read it through DNS rebinding.
  */
-export function createWebServer({ open }: WebOptions): Server {
+export function createWebServer({ open, organization, now = Date.now }: WebOptions): Server {
+  // The organizations scanned lately, by login in lower case, the oldest first: the only thing stored.
+  const kept = new Map<string, { at: number; listed: OrganizationResult }>();
+  const key = (input: string) => parseGitHubOrganizationUrl(input)!.toLowerCase();
+  const keep = (input: string, listed: OrganizationResult) => {
+    kept.delete(key(input));
+    kept.set(key(input), { at: now(), listed });
+    if (kept.size > KEPT) kept.delete(kept.keys().next().value!);
+  };
+  const recall = (input: string) => {
+    const entry = kept.get(key(input));
+    return entry && now() - entry.at < KEPT_FOR ? entry.listed : undefined;
+  };
+
   return createServer(async (request, response) => {
     const send = (status: number, html: string, headers: Record<string, string> = {}) => {
       response.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8', ...headers });
@@ -36,17 +65,73 @@ export function createWebServer({ open }: WebOptions): Server {
     const input = url.searchParams.get('repo')?.trim() ?? '';
     if (!input) return send(200, page(''));
     const filter = url.searchParams.get('filter')?.trim() ?? '';
+    const org = (organization && url.searchParams.get('org')?.trim()) || '';
     try {
-      send(200, page(input, result(await scan(await open(input)), input, filter)));
+      if (organization && parseGitHubOrganizationUrl(input)) {
+        // The page starts with the first progress, and shows the latest one until the scan is done:
+        // a failure before it is still a status of its own, one after it is on the page.
+        let started = false;
+        const progress = (message: string) => {
+          if (!started) {
+            started = true;
+            response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+            response.write(`${top(input)}<div class="progress" role="status">\n`);
+          }
+          response.write(`<p>${escape(message)}</p>\n`);
+        };
+        let content: string;
+        try {
+          const listed = await organization(input, { read: true, progress });
+          keep(input, listed);
+          content = repositories(listed, '');
+        } catch (failure) {
+          if (!started) throw failure;
+          content = error(describe(failure));
+        }
+        if (!started) return send(200, page(input, content));
+        return response.end(`</div>\n${content}${BOTTOM}`);
+      }
+      if (org && !parseGitHubOrganizationUrl(org)) throw new AtlasError(`Not a GitHub organization URL: ${org}`);
+      // The organization as it was scanned, with the repository's skills: no request at all.
+      let listed: OrganizationResult | AtlasError | undefined = org ? recall(org) : undefined;
+      let scanned = listed?.repositories.find((repository) => same(repository.id, input))?.result;
+      if (!scanned) {
+        // Both at once: each one is requests to GitHub. If the organization fails, the repository is still shown.
+        // Only listed, not read: the others are read as they are chosen.
+        const listing = listed ?? (org ? organization!(org, { read: false }).then((result) => (keep(org, result), result), (failure: unknown) => (failure instanceof AtlasError ? failure : Promise.reject(failure))) : undefined);
+        [listed, scanned] = await Promise.all([listing, open(input).then(scan)]);
+        // Kept with the organization: chosen again, it is shown at once.
+        const kept = listed instanceof AtlasError ? undefined : listed?.repositories.find((repository) => same(repository.id, input));
+        if (kept) Object.assign(kept, { result: scanned, skills: scanned.skills.length });
+      }
+      let chooser = '';
+      if (listed instanceof AtlasError) chooser = `<ul class="warnings"><li>warning: no repository chooser: ${escape(listed.message)}</li></ul>\n`;
+      else if (listed) chooser = repositories(listed, input);
+      send(200, page(input, `${chooser}${result(scanned, input, filter, org)}`));
     } catch (failure) {
-      if (failure instanceof AtlasError) return send(400, page(input, error(failure.message)));
-      send(500, page(input, error(`Unexpected error: ${failure instanceof Error ? failure.message : String(failure)}`)));
+      send(failure instanceof AtlasError ? 400 : 500, page(input, error(describe(failure))));
     }
   });
 }
 
+function describe(failure: unknown): string {
+  if (failure instanceof AtlasError) return failure.message;
+  return `Unexpected error: ${failure instanceof Error ? failure.message : String(failure)}`;
+}
+
+/** Whether the repository URL is the repository `<owner>/<repo>`, whatever the case. */
+function same(id: string, input: string): boolean {
+  const name = parseGitHubUrl(input);
+  return Boolean(name) && `${name!.owner}/${name!.repo}`.toLowerCase() === id.toLowerCase();
+}
+
 /** The whole page: the form, then what it found. */
 function page(input: string, content = ''): string {
+  return `${top(input)}${content}${BOTTOM}`;
+}
+
+/** The page up to what it found: the form. */
+function top(input: string): string {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -59,14 +144,42 @@ function page(input: string, content = ''): string {
 <header>
 <h1><a href="/">Skill Atlas</a></h1>
 <form method="get" action="/">
-<input type="text" name="repo" value="${escape(input)}" placeholder="https://github.com/owner/repo" aria-label="GitHub repository URL" required>
+<input type="text" name="repo" value="${escape(input)}" placeholder="https://github.com/owner/repo or https://github.com/organization" aria-label="GitHub repository or organization URL" required>
 <button type="submit">Show skills</button>
 </form>
 </header>
-<main>${content}</main>
+<main>`;
+}
+
+const BOTTOM = `</main>
 </body>
 </html>
 `;
+
+/**
+ * `<organization> · N repositories with skills`, the warnings, then a chooser of them: no script, a
+ * form that asks for the chosen repository, with the organization to show the chooser again.
+ */
+function repositories({ organization, repositories, warnings }: OrganizationResult, input: string): string {
+  const count = `${repositories.length} ${repositories.length === 1 ? 'repository' : 'repositories'} with skills`;
+  const heading = `<h2 class="organization"><a href="${escape(organization.url)}">${escape(organization.id)}</a> · ${count}</h2>
+${warnings.length ? `<ul class="warnings">${warnings.map((warning) => `<li>warning: ${escape(warning)}</li>`).join('')}</ul>` : ''}`;
+  if (!repositories.length) return `${heading}\n<p class="empty">No repositories with skills found.</p>`;
+  const any = repositories.some((repository) => same(repository.id, input));
+  const options = repositories.map((repository) => {
+    const selected = same(repository.id, input) ? ' selected' : '';
+    const skills = `${repository.skills} ${repository.skills === 1 ? 'skill' : 'skills'}`;
+    return `<option value="${escape(repository.url)}"${selected}>${escape(repository.id)} · ${skills}</option>`;
+  });
+  return `${heading}
+<form class="chooser" method="get" action="/">
+<input type="hidden" name="org" value="${escape(organization.url)}">
+<select name="repo" aria-label="Repository" required>
+<option value=""${any ? '' : ' selected'} disabled>Choose a repository</option>
+${options.join('\n')}
+</select>
+<button type="submit">Show skills</button>
+</form>`;
 }
 
 /**
@@ -76,7 +189,7 @@ function page(input: string, content = ''): string {
  * default: no request. The filter is the request's, then FILTER's as the field changes: the anchors
  * are the unfiltered ones, so a link selects the same skill with or without a filter.
  */
-function result({ repository, skills, warnings }: ScanResult, input: string, filter: string): string {
+function result({ repository, skills, warnings }: ScanResult, input: string, filter: string, org: string): string {
   const count = `${skills.length} ${skills.length === 1 ? 'skill' : 'skills'}`;
   const commit = repository.commit ? ` at <code>${escape(repository.commit.slice(0, 7))}</code>` : '';
   const anchors = anchorsOf(skills);
@@ -94,7 +207,7 @@ ${selected},
 .skills:not(:has(.detail:target:not([hidden]))) .list li:nth-child(1 of :not([hidden])) a { background: #ddf4ff; border-color: #54aeff; }
 </style>
 <div class="skills">
-<nav class="list">${filterForm(input, filter)}<ul>
+<nav class="list">${filterForm(input, filter, org)}<ul>
 ${all.map(({ skill, anchor, shown }) => listItem(skill, anchor, shown)).join('\n')}
 </ul>
 <p class="empty no-match"${none ? '' : ' hidden'}>No skills match &#8220;${escape(filter)}&#8221;.</p>
@@ -140,9 +253,9 @@ field.form.addEventListener('submit', (event) => event.preventDefault());
  * Above the list: only the skills whose names contain every word, for the same repository. No button:
  * the script filters as the field changes; without it, Enter submits the field.
  */
-function filterForm(input: string, filter: string): string {
+function filterForm(input: string, filter: string, org: string): string {
   return `<form class="filter" method="get" action="/">
-<input type="hidden" name="repo" value="${escape(input)}">
+${org ? `<input type="hidden" name="org" value="${escape(org)}">\n` : ''}<input type="hidden" name="repo" value="${escape(input)}">
 <input type="search" name="filter" value="${escape(filter)}" placeholder="Filter by name" aria-label="Filter skills by name">
 </form>`;
 }
@@ -195,7 +308,12 @@ header h1 a { color: inherit; text-decoration: none; }
 header form { display: flex; flex: 1; gap: .5rem; min-width: 20rem; }
 .filter { display: flex; margin-bottom: .75rem; }
 .filter input { min-width: 0; }
-input { flex: 1; font: inherit; padding: .4rem .6rem; border: 1px solid #d0d7de; border-radius: 6px; }
+.progress { color: #59636e; }
+/* Only the latest progress, and none once the page has what it found. */
+.progress p:not(:last-child), .progress:not(:last-child) { display: none; }
+.chooser { display: flex; gap: .5rem; max-width: 40rem; margin-bottom: 1rem; }
+select { min-width: 0; background: #fff; }
+input, select { flex: 1; font: inherit; padding: .4rem .6rem; border: 1px solid #d0d7de; border-radius: 6px; }
 button { font: inherit; padding: .4rem .9rem; border: 1px solid #1f883d; border-radius: 6px; background: #1f883d; color: #fff; cursor: pointer; }
 a { color: #0969da; }
 .skills { display: grid; grid-template-columns: minmax(14rem, 22rem) 1fr; gap: 1.5rem; align-items: start; }

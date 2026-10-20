@@ -13,9 +13,11 @@ build-tools-bump-gradle-api — Bumps the Gradle API version that Kotlin Gradle 
 …
 ```
 
-`./skill-atlas serve` opens the same in a browser, at http://127.0.0.1:3000/, with each skill's content.
+For an organization, `./skill-atlas scan https://github.com/<organization>` lists its repositories with skills.
 
-`npm run demo` records a video of its filter, in a headless browser: on a remote machine too, with no
+`./skill-atlas serve` opens the same in a browser, at http://127.0.0.1:3000/, with each skill's content; for an organization, a chooser of its repositories.
+
+`npm run demo` records a video of its organization chooser and filter, in a headless browser: on a remote machine too, with no
 display ([spec/demo.md](spec/demo.md)).
 
 ```console

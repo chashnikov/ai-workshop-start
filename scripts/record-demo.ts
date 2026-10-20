@@ -1,15 +1,16 @@
 #!/usr/bin/env node
-// `npm run demo [-- --out <file>]`: a video of the web view's filter, recorded in a headless browser,
-// so it works where there is no display: a remote machine, a container, CI. ./fixture is served as if
-// it were on GitHub, as in the tests (src/core/fixture.ts): no network, no token.
+// `npm run demo [-- --out <file>]`: a video of the web view, an organization's chooser then the filter,
+// recorded in a headless browser, so it works where there is no display: a remote machine, a container,
+// CI. ./fixture is served as if it were on GitHub, in an organization, as in the tests
+// (src/core/fixture.ts): no network, no token.
 import { once } from 'node:events';
 import { mkdir, rm } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { chromium, type Page } from 'playwright';
-import { fixtureOnGitHub } from '../src/core/fixture.ts';
-import { openGitHub } from '../src/core/github.ts';
+import { organizationOnGitHub } from '../src/core/fixture.ts';
+import { openGitHub, scanOrganization } from '../src/core/github.ts';
 import { replay } from '../src/core/replay.ts';
 import { createWebServer } from '../src/web.ts';
 
@@ -40,8 +41,11 @@ if (args.length !== 0 && (args.length !== 2 || args[0] !== '--out' || !args[1].e
 }
 const out = resolve(args[1] ?? 'recordings/filter.webm');
 
-const github = replay(fixtureOnGitHub());
-const server = createWebServer({ open: (input) => openGitHub(input, { fetch: github }) });
+const github = replay(organizationOnGitHub());
+const server = createWebServer({
+  open: (input) => openGitHub(input, { fetch: github }),
+  organization: (input, { read, progress } = {}) => scanOrganization(input, { fetch: github, read, progress }),
+});
 server.listen(0, '127.0.0.1');
 await once(server, 'listening');
 const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
@@ -59,8 +63,15 @@ Install it with: npx playwright install --only-shell chromium   (add --with-deps
 try {
   const context = await browser.newContext({ viewport: SIZE, recordVideo: { dir: videos, size: SIZE } });
   const page = await context.newPage();
-  await page.goto(`${base}?repo=${encodeURIComponent('https://github.com/JetBrains/fixture')}`);
-  await step(page, 'Every skill in the repository');
+  await page.goto(base);
+  await page.getByRole('textbox', { name: 'GitHub repository or organization URL' }).pressSequentially('https://github.com/JetBrains', { delay: KEY_DELAY / 4 });
+  await page.keyboard.press('Enter');
+  await page.waitForURL(/\?repo=/);
+  await step(page, 'A whole organization: its repositories with skills');
+  await page.getByRole('combobox', { name: 'Repository' }).selectOption({ label: 'JetBrains/fixture · 4 skills' });
+  await page.locator('.chooser').getByRole('button', { name: 'Show skills' }).click();
+  await page.waitForURL(/&repo=/);
+  await step(page, 'Choose one: its skills, the chooser stays on top');
   await type(page, 'co');
   await step(page, 'Filter as you type: names that contain “co”');
   await page.locator('.list li:not([hidden]) a').nth(1).click();
@@ -88,9 +99,19 @@ async function type(page: Page, text: string) {
   await filterField(page).pressSequentially(text, { delay: KEY_DELAY });
 }
 
-/** A caption over the page, with the address that keeps the words; the skills shown and the address's anchor, printed. */
+/**
+ * A caption over the page, with the address that keeps the words; printed: the skills shown and the
+ * address's anchor, or, on an organization's page, its heading and the chooser's repositories.
+ */
 async function step(page: Page, caption: string) {
   await page.evaluate(`(${CAPTION})(${JSON.stringify(caption)})`);
+  if (!(await filterField(page).count())) {
+    const heading = await page.locator('h2.organization').textContent();
+    const choices = await page.locator('.chooser option:not([disabled])').allTextContents();
+    console.log(`${caption} | ${heading} → ${choices.join(', ')} | no anchor`);
+    await page.waitForTimeout(PAUSE);
+    return;
+  }
   const shown = await page.locator('.list li:not([hidden]) .name').allTextContents();
   const filter = await filterField(page).inputValue();
   const anchor = new URL(page.url()).hash || 'no anchor';

@@ -1,12 +1,17 @@
 // The skill-atlas commands. The same code serves the Node CLI and the browser
 // terminal: everything that differs between them comes in through the context.
 import { AtlasError } from './core/errors.ts';
+import { parseGitHubOrganizationUrl, type OrganizationResult } from './core/github.ts';
 import { firstSentence, skillLink, type Repository, type Skill } from './core/model.ts';
 import { scan, type Source } from './core/scan.ts';
 
 export type Context = {
   /** Opens what the user asked to scan. */
   open(input: string): Promise<Source>;
+  /** Lists the repositories with skills of a GitHub organization, telling `progress` how it goes; only where it can be reached. */
+  organization?(input: string, progress?: (message: string) => void): Promise<OrganizationResult>;
+  /** What a long scan is doing, on one line, overwritten by the next; an empty text clears it. */
+  progress?(text: string): void;
   print(text: string): void;
   /** Errors and warnings. */
   error(text: string): void;
@@ -16,7 +21,8 @@ export type Context = {
 
 const usage = `Usage: skill-atlas <command>
 
-  scan <GitHub URL | directory>   find every SKILL.md in a repository and print it
+  scan <GitHub URL | directory>   find every SKILL.md in a repository and print it;
+                                  for an organization URL, its repositories with skills
   serve [--port <port>]           open a web view of a GitHub repository's skills (port 3000)
   help                            show this help`;
 
@@ -38,6 +44,13 @@ export async function run(args: string[], context: Context): Promise<number> {
 
 async function scanCommand(args: string[], context: Context) {
   if (args.length !== 1) throw new AtlasError('Usage: skill-atlas scan <GitHub URL | directory>');
+  if (context.organization && parseGitHubOrganizationUrl(args[0])) {
+    const progress = context.progress;
+    const result = await context.organization(args[0], progress).finally(() => progress?.(''));
+    printOrganization(result, context);
+    for (const warning of result.warnings) context.error(`warning: ${warning}`);
+    return;
+  }
   const result = await scan(await context.open(args[0]));
   printRepository(result.repository, result.skills, context);
   for (const warning of result.warnings) context.error(`warning: ${warning}`);
@@ -50,6 +63,15 @@ async function serveCommand(args: string[], context: Context) {
   const port = args.length ? Number(args[1]) : 3000;
   if (!/^\d+$/.test(args[1] ?? '0') || port > 65535) throw new AtlasError(`Not a port: ${args[1]}\n${usage}`);
   context.print(`Skill Atlas web view: ${await context.serve(port)}`);
+}
+
+/** `<organization> · N repositories with skills`, then each one's id, number of skills and link. */
+function printOrganization({ organization, repositories }: OrganizationResult, { print }: Context) {
+  print(`${organization.id} · ${repositories.length} ${repositories.length === 1 ? 'repository' : 'repositories'} with skills`);
+  for (const repository of repositories) {
+    print(`${repository.id} · ${repository.skills} ${repository.skills === 1 ? 'skill' : 'skills'}`);
+    print(`  ${repository.url}`);
+  }
 }
 
 /** `<owner>/<repo> · N skills`, then each skill's name, first sentence and link. */

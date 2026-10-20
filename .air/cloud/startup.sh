@@ -37,7 +37,7 @@ echo "[startup] npm ci"
 npm ci --no-audit --no-fund
 echo "[startup] dependencies installed"
 
-# Headless Chromium for `npm run demo`, the filter on video (spec/demo.md): no display needed. The
+# Headless Chromium for `npm run demo`, the web view on video (spec/demo.md): no display needed. The
 # system libraries need root; without them, the demo's test is skipped outside CI. Without network
 # access to Playwright's CDN the download fails: startup goes on, and the healthcheck still runs.
 echo "[startup] playwright chromium"

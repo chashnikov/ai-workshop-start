@@ -32,3 +32,32 @@ export function fixtureOnGitHub(): Recording {
     .map((entry) => relative(FIXTURE, join(entry.parentPath, entry.name)));
   return onGitHub('fixture', Object.fromEntries(paths.map((path) => [path, readFileSync(join(FIXTURE, path), 'utf8')])));
 }
+
+/**
+ * JetBrains, an organization, listed without a token: JetBrains/fixture as above, JetBrains/tools
+ * with one skill and JetBrains/docs with none.
+ */
+export function organizationOnGitHub(): Recording {
+  const API = 'https://api.github.com';
+  const tools = { '.claude/skills/review/SKILL.md': '---\nname: review\ndescription: Review a change the way this team does. Use for every pull request.\n---\n# Review\n' };
+  const fixture = fixtureOnGitHub();
+  const tree = (name: string, paths: string[]): Recording => ({
+    [`${API}/repos/JetBrains/${name}/git/trees/main?recursive=1`]: {
+      status: 200,
+      body: { truncated: false, tree: paths.map((path) => ({ path, mode: '100644', type: 'blob', sha: COMMIT })) },
+    },
+  });
+  const fixturePaths = Object.keys(fixture).filter((url) => url.startsWith('https://raw.githubusercontent.com/')).map((url) => url.split(`/${COMMIT}/`)[1]);
+  return {
+    ...fixture,
+    ...onGitHub('tools', tools),
+    [`${API}/users/JetBrains`]: { status: 200, body: { login: 'JetBrains', type: 'Organization' } },
+    [`${API}/orgs/JetBrains/repos?type=all&per_page=100&page=1`]: {
+      status: 200,
+      body: ['tools', 'docs', 'fixture'].map((name) => ({ full_name: `JetBrains/${name}`, default_branch: 'main' })),
+    },
+    ...tree('fixture', fixturePaths),
+    ...tree('tools', Object.keys(tools)),
+    ...tree('docs', ['README.md']),
+  };
+}
