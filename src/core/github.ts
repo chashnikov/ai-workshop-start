@@ -49,11 +49,13 @@ async function head(github: Client, name: string): Promise<{ id: string; sha: st
   return { id: info.full_name, sha };
 }
 
-/** The repository at the commit, its files read from there. */
-function source(github: Client, id: string, sha: string, paths: string[], warnings: string[]): Source {
+/**
+ * The repository at the commit, its files read from there. When they were last updated, PARALLEL at
+ * a time: hundreds of skills at once would be GitHub's secondary rate limit. An organization's read
+ * passes its own `limited`, for all of its repositories.
+ */
+function source(github: Client, id: string, sha: string, paths: string[], warnings: string[], limited = limit(PARALLEL)): Source {
   const [organization, repo] = id.split('/');
-  // PARALLEL at a time: hundreds of skills at once would be GitHub's secondary rate limit.
-  const limited = limit(PARALLEL);
   return {
     repository: { id, organization, name: repo, url: `https://github.com/${id}`, commit: sha },
     paths,
@@ -174,6 +176,8 @@ async function readOrganization(
 ): Promise<void> {
   const read: string[][] = repositories.map(() => []); // the warnings, in the listed order
   let limited: RateLimitError | undefined;
+  // The repositories are read PARALLEL at a time: their last updates too, all of them together.
+  const updates = limit(PARALLEL);
   let done = 0;
   progress(done, repositories.length);
   await inParallel(repositories, async (repository, index) => {
@@ -185,7 +189,7 @@ async function readOrganization(
       const { id, sha } = listing.branch
         ? { id: repository.id, sha: (await own.json<{ sha: string }>(`${API}/repos/${repository.id}/commits/${encodePath(listing.branch)}`)).sha }
         : await head(own, repository.id);
-      repository.result = await scan(source(own, id, sha, listing.paths, [...listing.warnings]), { updated: true });
+      repository.result = await scan(source(own, id, sha, listing.paths, [...listing.warnings], updates), { updated: true });
       repository.skills = repository.result.skills.length;
     } catch (error) {
       if (error instanceof RateLimitError) return void (limited = error);

@@ -390,6 +390,28 @@ test('reading the skills: the rate limit while the last updates are read stops t
   assert.doesNotMatch(result.warnings.join('\n'), /last update/);
 });
 
+test('reading the skills: at most 8 requests for the last updates at the same time, for all the repositories together', async () => {
+  const names = Array.from({ length: 10 }, (_, n) => `Many/r${n}`);
+  const files = Object.fromEntries(Array.from({ length: 10 }, (_, n) => [`.claude/skills/s${n}/SKILL.md`, skill(`s${n}`)]));
+  const recorded = replay({
+    ...owner('Many', 'Organization'),
+    ...list(`${API}/orgs/Many/repos?type=all`, names.map((id) => ({ id }))),
+    ...Object.assign({}, ...names.map((id) => ({ ...tree(id, Object.keys(files)), ...repository(id, files) }))),
+  });
+  let running = 0;
+  let most = 0;
+  const fetch: Fetch = async (url, init) => {
+    if (!url.includes('/commits?')) return recorded(url, init);
+    most = Math.max(most, ++running);
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    running--;
+    return recorded(url, init);
+  };
+  const result = await scanOrganization('https://github.com/Many', { fetch, read: true });
+  assert.deepEqual(result.repositories.map(({ result }) => result?.skills.filter((skill) => skill.updated).length), names.map(() => 10));
+  assert.equal(most, 8);
+});
+
 test('reading the skills: a repository whose tree is too large keeps its warning, as a scan of it does', async () => {
   const entries = (items: { path: string; type: string; sha: string }[]) => ({ status: 200, body: { truncated: false, tree: items.map((item) => ({ mode: '100644', ...item })) } });
   const recording: Recording = {

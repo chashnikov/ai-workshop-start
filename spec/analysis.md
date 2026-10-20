@@ -12,7 +12,7 @@ Skill: id = `repo:path`, name, description, body, commit, **last updated**
 - The link pins the *scanned commit*
 - **Last updated**: the time of the last commit to the skill's SKILL.md, up to the scanned commit; its copies' are not asked for
   - Only when it is shown, by the web view ([web.md](web.md#output)): the CLI does not ask for it
-  - GitHub: a request per skill, `commits?sha=<commit>&path=<path>&per_page=1`, *8 at a time*; a local directory: none, not known
+  - GitHub: a request per skill, `commits?sha=<commit>&path=<path>&per_page=1`, *8 at a time*, an organization's repositories all together; a local directory: none, not known
   - It cannot be read → not known, *one warning*: `the last update of N skills cannot be read: <message>`; the scan goes on.
     The rate limit → the clear message, the scan stops, as for any other request
 - Malformed front matter → a *warning*, the scan goes on
