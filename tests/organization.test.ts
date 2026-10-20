@@ -565,7 +565,8 @@ test('web: choosing a repository whose skills could not be read → it is scanne
   requests.length = 0;
   const again = await get(`org=${encodeURIComponent('https://github.com/Half')}&repo=${encodeURIComponent('https://github.com/Half/gone')}`);
   assert.equal(requests.length, 0, requests.join(' '));
-  assert.equal(again.html.replace(/<li>warning: [^<]*<\/li>/g, ''), chosen.html.replace(/<li>warning: [^<]*<\/li>/g, ''));
+  // The same page, its warnings and the organization's too.
+  assert.equal(again.html, chosen.html);
 });
 
 test('web: an organization is kept for 10 minutes, then scanned again; the organization page always scans', async () => {
