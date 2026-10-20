@@ -11,7 +11,8 @@ export type WebOptions = {
 };
 
 /**
- * `GET /` is the form; `GET /?repo=<URL>` is the form and the repository's skills. Only for this
+ * `GET /` is the form; `GET /?repo=<URL>` is the form and the repository's skills, `&filter=<word>`
+ * only those whose names contain it. Only for this
  * machine's own addresses: a page elsewhere must not read it through DNS rebinding.
  */
 export function createWebServer({ open }: WebOptions): Server {
@@ -34,8 +35,9 @@ export function createWebServer({ open }: WebOptions): Server {
     if (request.method === 'HEAD') return send(200, '');
     const input = url.searchParams.get('repo')?.trim() ?? '';
     if (!input) return send(200, page(''));
+    const filter = url.searchParams.get('filter')?.trim() ?? '';
     try {
-      send(200, page(input, result(await scan(await open(input)))));
+      send(200, page(input, result(await scan(await open(input)), input, filter)));
     } catch (failure) {
       if (failure instanceof AtlasError) return send(400, page(input, error(failure.message)));
       send(500, page(input, error(`Unexpected error: ${failure instanceof Error ? failure.message : String(failure)}`)));
@@ -68,32 +70,53 @@ function page(input: string, content = ''): string {
 }
 
 /**
- * `<owner>/<repo> · N skills`, the warnings, then master-detail: the skills on the left, the
- * selected one on the right. Every skill is on the page, so selecting one is `#<anchor>` and
- * CSS `:target`, with the first one selected by default: no request, no script.
+ * `<owner>/<repo> · N skills`, the warnings, then master-detail: the filter and the skills on the
+ * left, the selected one on the right. Every skill that passes the filter is on the page, so
+ * selecting one is `#<anchor>` and CSS `:target`, with the first one selected by default: no
+ * request, no script. Filtering is a new request: the anchors are the unfiltered ones, so a link
+ * selects the same skill with or without a filter.
  */
-function result({ repository, skills, warnings }: ScanResult): string {
+function result({ repository, skills, warnings }: ScanResult, input: string, filter: string): string {
   const count = `${skills.length} ${skills.length === 1 ? 'skill' : 'skills'}`;
   const commit = repository.commit ? ` at <code>${escape(repository.commit.slice(0, 7))}</code>` : '';
   const anchors = anchorsOf(skills);
   const heading = `<h2 class="repository"><a href="${escape(repository.url)}">${escape(repository.id)}</a> · ${count}${commit}</h2>
 ${warnings.length ? `<ul class="warnings">${warnings.map((warning) => `<li>warning: ${escape(warning)}</li>`).join('')}</ul>` : ''}`;
   if (!skills.length) return `${heading}\n<p class="empty">No skills found.</p>`;
+  const word = filter.toLowerCase();
+  const shown = skills.map((skill, index) => ({ skill, anchor: anchors[index] })).filter(({ skill }) => skill.name.toLowerCase().includes(word));
+  const form = filterForm(input, filter);
+  if (!shown.length) {
+    return `${heading}
+<div class="skills">
+<nav class="list">${form}</nav>
+<p class="empty">No skills match &#8220;${escape(filter)}&#8221;.</p>
+</div>`;
+  }
   // The selected skill's item in the list: anchors are [\w-] only, safe in CSS as they are.
-  const selected = anchors.map((id) => `body:has(#${id}:target) .list a[href="#${id}"]`).join(',\n');
+  const selected = shown.map(({ anchor }) => `body:has(#${anchor}:target) .list a[href="#${anchor}"]`).join(',\n');
   return `${heading}
 <style>
 ${selected},
 .skills:not(:has(.detail:target)) .list li:first-child a { background: #ddf4ff; border-color: #54aeff; }
 </style>
 <div class="skills">
-<nav class="list"><ul>
-${skills.map((skill, index) => listItem(skill, anchors[index])).join('\n')}
+<nav class="list">${form}<ul>
+${shown.map(({ skill, anchor }) => listItem(skill, anchor)).join('\n')}
 </ul></nav>
 <div class="details">
-${skills.map((skill, index) => detail(repository, skill, anchors[index])).join('\n')}
+${shown.map(({ skill, anchor }) => detail(repository, skill, anchor)).join('\n')}
 </div>
 </div>`;
+}
+
+/** Above the list: only the skills whose names contain the word, for the same repository. */
+function filterForm(input: string, filter: string): string {
+  return `<form class="filter" method="get" action="/">
+<input type="hidden" name="repo" value="${escape(input)}">
+<input type="search" name="filter" value="${escape(filter)}" placeholder="Filter by name" aria-label="Filter skills by name">
+<button type="submit">Filter</button>
+</form>`;
 }
 
 function listItem(skill: Skill, anchor: string): string {
@@ -141,7 +164,9 @@ body { font: 16px/1.5 system-ui, sans-serif; margin: 0 auto; max-width: 80rem; p
 header { display: flex; flex-wrap: wrap; align-items: center; gap: 1rem; padding: 1rem 0; border-bottom: 1px solid #d0d7de; }
 header h1 { font-size: 1.25rem; margin: 0; }
 header h1 a { color: inherit; text-decoration: none; }
-form { display: flex; flex: 1; gap: .5rem; min-width: 20rem; }
+header form { display: flex; flex: 1; gap: .5rem; min-width: 20rem; }
+.filter { display: flex; gap: .5rem; margin-bottom: .75rem; }
+.filter input { min-width: 0; }
 input { flex: 1; font: inherit; padding: .4rem .6rem; border: 1px solid #d0d7de; border-radius: 6px; }
 button { font: inherit; padding: .4rem .9rem; border: 1px solid #1f883d; border-radius: 6px; background: #1f883d; color: #fff; cursor: pointer; }
 a { color: #0969da; }

@@ -311,3 +311,64 @@ test('skill-atlas serve: a port that is not a number, over 65535 or taken → a 
   assert.equal(busy.status, 1);
   assert.match(busy.stderr, new RegExp(`^Cannot start the web view on port ${port}: .*EADDRINUSE`));
 });
+
+/** The filter's form above the list: the repository it keeps, and the word. */
+function filterForm(html: string) {
+  const nav = /<nav class="list">([\s\S]*?)<\/nav>/.exec(html)?.[1] ?? '';
+  const form = /^<form class="filter" method="get" action="\/">([\s\S]*?)<\/form>/.exec(nav)?.[1];
+  if (form === undefined) return undefined;
+  return {
+    repo: /<input type="hidden" name="repo" value="([^"]*)">/.exec(form)?.[1],
+    filter: /<input type="search" name="filter" value="([^"]*)"/.exec(form)?.[1],
+  };
+}
+
+const filtered = (repo: string, filter: string) => get(`?repo=${encodeURIComponent(repo)}&filter=${encodeURIComponent(filter)}`);
+
+test('filter: a text field above the list, for the same repository; empty shows every skill', async () => {
+  const page = await view('github.com/JetBrains/fixture');
+  // filterForm reads the form only at the start of the list's column: above the list.
+  assert.deepEqual(filterForm(page.html), { repo: 'github.com/JetBrains/fixture', filter: '' });
+  const empty = await filtered('github.com/JetBrains/fixture', '  ');
+  assert.equal(list(empty.html).length, 4);
+  assert.deepEqual(filterForm(empty.html), { repo: 'github.com/JetBrains/fixture', filter: '' });
+});
+
+test('filter: only the skills whose names contain the word, ignoring case, in both columns', async () => {
+  const page = await filtered('github.com/JetBrains/fixture', 'CO');
+  assert.equal(page.status, 200);
+  assert.deepEqual(list(page.html).map((item) => item.name), ['code-style', 'commits']);
+  assert.deepEqual([...details(page.html).keys()], ['skill-code-style', 'skill-commits']);
+  assert.deepEqual(filterForm(page.html), { repo: 'github.com/JetBrains/fixture', filter: 'CO' });
+  // The heading still counts the repository's skills; the warnings stay.
+  assert.match(page.html, /JetBrains\/fixture<\/a> · 4 skills/);
+  assert.match(page.html, /<li>warning: /);
+  // Names only: "testing" says "pushing" in its description, not in its name.
+  assert.deepEqual(list((await filtered('github.com/JetBrains/fixture', 'push')).html), []);
+});
+
+test('filter: the anchors stay those of the whole list; the first match is selected by default, with no script', async () => {
+  const page = await filtered('github.com/JetBrains/fixture', 'test');
+  assert.doesNotMatch(page.html, /<script/);
+  assert.deepEqual(list(page.html).map((item) => item.anchor), ['skill-testing']);
+  assert.ok(page.html.includes('body:has(#skill-testing:target) .list a[href="#skill-testing"]'));
+  assert.ok(!page.html.includes('#skill-commits'));
+  assert.match(page.html, /\.skills:not\(:has\(\.detail:target\)\) \.list li:first-child a \{ background/);
+  const same = await filtered('https://github.com/JetBrains/same-name', 'view');
+  assert.deepEqual(list(same.html).map((item) => item.anchor), ['skill-review', 'skill-review-2']);
+});
+
+test('filter: no match → "No skills match", the field still there; the word is text, never markup', async () => {
+  const page = await filtered('github.com/JetBrains/fixture', '<b>"x"</b>');
+  assert.equal(page.status, 200);
+  assert.deepEqual(filterForm(page.html), { repo: 'github.com/JetBrains/fixture', filter: '&#60;b&#62;&#34;x&#34;&#60;/b&#62;' });
+  assert.doesNotMatch(page.html, /<b>/);
+  assert.ok(text(page.html).endsWith('No skills match “<b>"x"</b>”.'), text(page.html));
+  assert.deepEqual(list(page.html), []);
+});
+
+test('filter: a repository with no skills → "No skills found.", no filter', async () => {
+  const page = await filtered('https://github.com/JetBrains/empty', 'x');
+  assert.equal(text(page.html), 'JetBrains/empty · 0 skills at 0123456 No skills found.');
+  assert.equal(filterForm(page.html), undefined);
+});

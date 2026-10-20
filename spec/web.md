@@ -15,6 +15,10 @@ A **GitHub repository** URL, in the page's form: `GET /?repo=<URL>`
 - In `<name>`, anything but letters, digits, `_` and `-` is `-`; the same anchor again gets `-2`, `-3`…
 - Selecting a skill keeps the page at the top: the repository stays *in view*
 - No skills → `No skills found.`
+- **Filter**: a text field *above the list*; `&filter=<word>` shows only the skills whose **name** contains the word,
+  ignoring case; empty → every skill. A new request, as the form: *no script*, a link to share
+  - The anchors stay those of the whole list; the *first matching* skill is selected by default
+  - No skill matches → `No skills match “<word>”.`, the field still there
 - Narrow screens: the list above the skill; selecting one scrolls to it
 - Warnings on the page; the scan goes on
 - Repository content is *text*, never markup: it is escaped, shown as written
