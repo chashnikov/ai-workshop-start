@@ -11,8 +11,9 @@ export type WebOptions = {
 };
 
 /**
- * `GET /` is the form; `GET /?repo=<URL>` is the form and the repository's skills. Only for this
- * machine's own addresses: a page elsewhere must not read it through DNS rebinding.
+ * `GET /` is the form; `GET /?repo=<URL>` is the form and the repository's skills; `&filter=<words>`
+ * only the skills whose names contain every word (the page's script then filters as the words are typed).
+ * Only for this machine's own addresses: a page elsewhere must not read it through DNS rebinding.
  */
 export function createWebServer({ open }: WebOptions): Server {
   return createServer(async (request, response) => {
@@ -34,8 +35,9 @@ export function createWebServer({ open }: WebOptions): Server {
     if (request.method === 'HEAD') return send(200, '');
     const input = url.searchParams.get('repo')?.trim() ?? '';
     if (!input) return send(200, page(''));
+    const filter = url.searchParams.get('filter')?.trim() ?? '';
     try {
-      send(200, page(input, result(await scan(await open(input)))));
+      send(200, page(input, result(await scan(await open(input)), input, filter)));
     } catch (failure) {
       if (failure instanceof AtlasError) return send(400, page(input, error(failure.message)));
       send(500, page(input, error(`Unexpected error: ${failure instanceof Error ? failure.message : String(failure)}`)));
@@ -68,42 +70,91 @@ function page(input: string, content = ''): string {
 }
 
 /**
- * `<owner>/<repo> · N skills`, the warnings, then master-detail: the skills on the left, the
- * selected one on the right. Every skill is on the page, so selecting one is `#<anchor>` and
- * CSS `:target`, with the first one selected by default: no request, no script.
+ * `<owner>/<repo> · N skills`, the warnings, then master-detail: the filter and the skills on the
+ * left, the selected one on the right. Every skill is on the page, those that do not pass the filter
+ * `hidden`, so selecting one is `#<anchor>` and CSS `:target`, with the first one shown selected by
+ * default: no request. The filter is the request's, then FILTER's as the field changes: the anchors
+ * are the unfiltered ones, so a link selects the same skill with or without a filter.
  */
-function result({ repository, skills, warnings }: ScanResult): string {
+function result({ repository, skills, warnings }: ScanResult, input: string, filter: string): string {
   const count = `${skills.length} ${skills.length === 1 ? 'skill' : 'skills'}`;
   const commit = repository.commit ? ` at <code>${escape(repository.commit.slice(0, 7))}</code>` : '';
   const anchors = anchorsOf(skills);
   const heading = `<h2 class="repository"><a href="${escape(repository.url)}">${escape(repository.id)}</a> · ${count}${commit}</h2>
 ${warnings.length ? `<ul class="warnings">${warnings.map((warning) => `<li>warning: ${escape(warning)}</li>`).join('')}</ul>` : ''}`;
   if (!skills.length) return `${heading}\n<p class="empty">No skills found.</p>`;
+  const words = filter.toLowerCase().split(/\s+/).filter(Boolean);
+  const all = skills.map((skill, index) => ({ skill, anchor: anchors[index], shown: words.every((word) => skill.name.toLowerCase().includes(word)) }));
+  const none = all.every(({ shown }) => !shown);
   // The selected skill's item in the list: anchors are [\w-] only, safe in CSS as they are.
-  const selected = anchors.map((id) => `body:has(#${id}:target) .list a[href="#${id}"]`).join(',\n');
+  const selected = all.map(({ anchor }) => `body:has(#${anchor}:target:not([hidden])) .list a[href="#${anchor}"]`).join(',\n');
   return `${heading}
 <style>
 ${selected},
-.skills:not(:has(.detail:target)) .list li:first-child a { background: #ddf4ff; border-color: #54aeff; }
+.skills:not(:has(.detail:target:not([hidden]))) .list li:nth-child(1 of :not([hidden])) a { background: #ddf4ff; border-color: #54aeff; }
 </style>
 <div class="skills">
-<nav class="list"><ul>
-${skills.map((skill, index) => listItem(skill, anchors[index])).join('\n')}
-</ul></nav>
+<nav class="list">${filterForm(input, filter)}<ul>
+${all.map(({ skill, anchor, shown }) => listItem(skill, anchor, shown)).join('\n')}
+</ul>
+<p class="empty no-match"${none ? '' : ' hidden'}>No skills match &#8220;${escape(filter)}&#8221;.</p>
+</nav>
 <div class="details">
-${skills.map((skill, index) => detail(repository, skill, anchors[index])).join('\n')}
+${all.map(({ skill, anchor, shown }) => detail(repository, skill, anchor, shown)).join('\n')}
 </div>
-</div>`;
+</div>
+<script>${FILTER}</script>`;
 }
 
-function listItem(skill: Skill, anchor: string): string {
+/**
+ * Filters as the field changes, the way the server does: the skills whose names contain every word,
+ * ignoring case; the address keeps the words, a link to share. Enter submits nothing: the list is
+ * already filtered, no new request, no new scan. Static: no repository content in it.
+ */
+const FILTER = `
+const field = document.querySelector('.filter input[type=search]');
+const items = [...document.querySelectorAll('.list li')];
+const details = [...document.querySelectorAll('.details .detail')];
+const none = document.querySelector('.no-match');
+field.addEventListener('input', () => {
+  const filter = field.value.trim();
+  const words = filter.toLowerCase().split(/\\s+/).filter(Boolean);
+  let shown = 0;
+  items.forEach((item, index) => {
+    const name = item.querySelector('.name').textContent.toLowerCase();
+    const match = words.every((word) => name.includes(word));
+    item.hidden = details[index].hidden = !match;
+    if (match) shown++;
+  });
+  none.hidden = shown > 0;
+  none.textContent = \`No skills match \u201c\${filter}\u201d.\`;
+  const url = new URL(location.href);
+  if (filter) url.searchParams.set('filter', filter);
+  else url.searchParams.delete('filter');
+  history.replaceState(null, '', url);
+});
+field.form.addEventListener('submit', (event) => event.preventDefault());
+`;
+
+/**
+ * Above the list: only the skills whose names contain every word, for the same repository. No button:
+ * the script filters as the field changes; without it, Enter submits the field.
+ */
+function filterForm(input: string, filter: string): string {
+  return `<form class="filter" method="get" action="/">
+<input type="hidden" name="repo" value="${escape(input)}">
+<input type="search" name="filter" value="${escape(filter)}" placeholder="Filter by name" aria-label="Filter skills by name">
+</form>`;
+}
+
+function listItem(skill: Skill, anchor: string, shown: boolean): string {
   const summary = skill.description ? `<span class="summary">${escape(firstSentence(skill.description))}</span>` : '';
-  return `<li><a href="#${anchor}"><span class="name">${escape(skill.name)}</span>${summary}</a></li>`;
+  return `<li${shown ? '' : ' hidden'}><a href="#${anchor}"><span class="name">${escape(skill.name)}</span>${summary}</a></li>`;
 }
 
-function detail(repository: Repository, skill: Skill, anchor: string): string {
+function detail(repository: Repository, skill: Skill, anchor: string, shown: boolean): string {
   const link = skillLink(repository, skill);
-  return `<section class="detail" id="${anchor}">
+  return `<section class="detail" id="${anchor}"${shown ? '' : ' hidden'}>
 <h3>${escape(skill.name)}</h3>
 ${skill.description ? `<p class="description">${escape(skill.description)}</p>` : ''}
 <p class="link"><a href="${escape(link)}">${escape(skill.path)}</a></p>
@@ -141,7 +192,9 @@ body { font: 16px/1.5 system-ui, sans-serif; margin: 0 auto; max-width: 80rem; p
 header { display: flex; flex-wrap: wrap; align-items: center; gap: 1rem; padding: 1rem 0; border-bottom: 1px solid #d0d7de; }
 header h1 { font-size: 1.25rem; margin: 0; }
 header h1 a { color: inherit; text-decoration: none; }
-form { display: flex; flex: 1; gap: .5rem; min-width: 20rem; }
+header form { display: flex; flex: 1; gap: .5rem; min-width: 20rem; }
+.filter { display: flex; margin-bottom: .75rem; }
+.filter input { min-width: 0; }
 input { flex: 1; font: inherit; padding: .4rem .6rem; border: 1px solid #d0d7de; border-radius: 6px; }
 button { font: inherit; padding: .4rem .9rem; border: 1px solid #1f883d; border-radius: 6px; background: #1f883d; color: #fff; cursor: pointer; }
 a { color: #0969da; }
@@ -153,7 +206,7 @@ a { color: #0969da; }
 .list .name { display: block; font-weight: 600; }
 .list .summary { display: block; font-size: .8125rem; color: #59636e; }
 .detail { display: none; border: 1px solid #d0d7de; border-radius: 6px; padding: 0 1rem 1rem; min-width: 0; }
-.detail:target, .details:not(:has(.detail:target)) .detail:first-child { display: block; }
+.detail:target:not([hidden]), .details:not(:has(.detail:target:not([hidden]))) .detail:nth-child(1 of :not([hidden])) { display: block; }
 /* Selecting a skill scrolls to it; a margin taller than the screen keeps the page at the top, the repository in view. */
 .detail { scroll-margin-top: 100vh; }
 .detail h3 { font-size: 1.5rem; }
