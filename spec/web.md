@@ -7,8 +7,12 @@ A **GitHub repository** URL, in the page's form: `GET /?repo=<URL>`
 - Listens on `127.0.0.1` only; `GITHUB_TOKEN` as for the CLI
 ## Output
 `<owner>/<repo> · N skills`, linked to the repository, with the scanned commit
-- A table of contents, then every skill, sorted by **name**: name, the *whole* description,
-  the link pinned to the commit, `also in <paths>` for copies, and its **content**: the SKILL.md after the front matter
+- **Master-detail**: the skills in a *left column*, sorted by **name**: name and the description's *first sentence*;
+  the *selected* skill on the right: name, the *whole* description, the link pinned to the commit,
+  `also in <paths>` for copies, and its **content**: the SKILL.md after the front matter
+- The *first* skill is selected by default; selecting another is `#skill-<name>`: *no new scan*, no script, a link to share
+- No skills → `No skills found.`
+- Narrow screens: the list above the skill
 - Warnings on the page; the scan goes on
 - Repository content is *text*, never markup: it is escaped, shown as written
 ## Errors
