@@ -26,7 +26,7 @@ const browser = await chromium.launch().then(
   () => false,
 );
 
-test('demo: a video of the filter, with no display and no network', { skip: !browser && !process.env.CI && 'no Playwright Chromium' }, () => {
+test('demo: a video of an organization\'s chooser and the filter, with no display and no network', { skip: !browser && !process.env.CI && 'no Playwright Chromium' }, () => {
   const out = join(temp, 'nested', 'filter.webm');
   const { code, stdout, stderr } = record(['--out', out]);
   assert.equal(code, 0, stderr);
@@ -35,10 +35,11 @@ test('demo: a video of the filter, with no display and no network', { skip: !bro
   // WebM: an EBML header, and more than a still frame.
   assert.deepEqual([...video.subarray(0, 4)], [0x1a, 0x45, 0xdf, 0xa3]);
   assert.ok(video.length > 50_000, `${video.length} bytes`);
-  // What it shows: every skill, then the filter as it is typed, a selection, several words, no match, empty.
+  // What it shows: the organization's repositories with skills, one chosen: every skill, then the filter as it is typed, a selection, several words, no match, empty.
   // The selection is the address's anchor: #skill-commits from the click on, as the filter keeps it.
   const steps = stdout.split('\n').filter((line) => line.includes(' | ')).map((line) => line.split(' | ').slice(1).join(' | '));
   assert.deepEqual(steps, [
+    'JetBrains · 2 repositories with skills → JetBrains/fixture · 4 skills, JetBrains/tools · 1 skill | no anchor',
     '“” → code-style, commits, release-checklist, testing | no anchor',
     '“co” → code-style, commits | no anchor',
     '“co” → code-style, commits | #skill-commits',
