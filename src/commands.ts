@@ -8,8 +8,10 @@ import { scan, type Source } from './core/scan.ts';
 export type Context = {
   /** Opens what the user asked to scan. */
   open(input: string): Promise<Source>;
-  /** Lists the repositories with skills of a GitHub organization; only where it can be reached. */
-  organization?(input: string): Promise<OrganizationResult>;
+  /** Lists the repositories with skills of a GitHub organization, telling `progress` how it goes; only where it can be reached. */
+  organization?(input: string, progress?: (message: string) => void): Promise<OrganizationResult>;
+  /** What a long scan is doing, on one line, overwritten by the next; an empty text clears it. */
+  progress?(text: string): void;
   print(text: string): void;
   /** Errors and warnings. */
   error(text: string): void;
@@ -43,7 +45,8 @@ export async function run(args: string[], context: Context): Promise<number> {
 async function scanCommand(args: string[], context: Context) {
   if (args.length !== 1) throw new AtlasError('Usage: skill-atlas scan <GitHub URL | directory>');
   if (context.organization && parseGitHubOrganizationUrl(args[0])) {
-    const result = await context.organization(args[0]);
+    const progress = context.progress;
+    const result = await context.organization(args[0], progress).finally(() => progress?.(''));
     printOrganization(result, context);
     for (const warning of result.warnings) context.error(`warning: ${warning}`);
     return;

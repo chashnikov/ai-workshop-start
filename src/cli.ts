@@ -13,14 +13,17 @@ const token = process.env.GITHUB_TOKEN || undefined;
 
 process.exitCode = await run(process.argv.slice(2), {
   open: (input) => (parseGitHubUrl(input) ? openGitHub(input, { fetch, token }) : openDirectory(input)),
-  organization: (input) => scanOrganization(input, { fetch, token }),
+  organization: (input, progress) => scanOrganization(input, { fetch, token, progress }),
+  // On a terminal only: in a file or a pipe, the lines would only get in the way.
+  progress: process.stderr.isTTY ? (text) => process.stderr.write(`\r\x1b[K${text}`) : undefined,
   print: (text) => console.log(text),
   error: (text) => console.error(text),
   // GitHub only: a page must not read this machine's directories. On this machine only, too.
   async serve(port) {
     const server = createWebServer({
       open: (input) => openGitHub(input, { fetch, token }),
-      organization: (input) => scanOrganization(input, { fetch, token }),
+      // Read as the organization is listed: choosing a repository shows its skills at once.
+      organization: (input, progress) => scanOrganization(input, { fetch, token, read: true, progress }),
     });
     server.listen(port, '127.0.0.1');
     try {

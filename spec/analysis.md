@@ -25,8 +25,12 @@ a user's `https://github.com/<user>` too
   each with the number of its skills, as defined above
 - With `GITHUB_TOKEN`: a code search over the whole organization, and one over its **forks**, which code search
   leaves out otherwise (`fork:true` finds only forks); at most 1000 `SKILL.md` files each: a *warning* for the rest;
-  a timed-out search: a *warning*; the fork search's warnings say *in forks*; without it: each repository's tree at its default
+  a timed-out search: a *warning*; the fork search's warnings say *in forks*;
+  without `GITHUB_TOKEN`: each repository's tree at its default
   branch, a few at a time, a branch name with `/` resolved to its commit first
 - A repository that cannot be listed, an empty one say → a *warning*, the scan goes on;
   the rate limit → the clear message, the scan stops: no more repositories are asked for
+- **Progress** as it goes: `Listing the repositories of <organization>…`, `Listed 3 of 40 repositories of <organization>…`,
+  or `Searching the repositories of <organization> for SKILL.md files…`; `Read the skills of 2 of 5 repositories…`
+  when the skills are read too ([web.md](web.md#organization))
 - Unknown organization → `Organization not found: https://github.com/<organization>`, exit code 1

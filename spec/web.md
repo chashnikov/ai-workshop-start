@@ -1,6 +1,7 @@
 # Web view
 `./skill-atlas serve [--port <port>]`: a page at `http://127.0.0.1:<port>/`, port **3000** by default.
-A *thin client* like the CLI: it scans on every request; *nothing is stored*.
+A *thin client* like the CLI: it scans on every request; *nothing is stored*, but the organizations scanned lately
+([Organization](#organization)), in memory.
 ## Input
 A **GitHub repository** URL, in the page's form: `GET /?repo=<URL>`
 - GitHub only: the page *never reads local directories*
@@ -29,16 +30,24 @@ A **GitHub repository** URL, in the page's form: `GET /?repo=<URL>`
 - Repository content is *text*, never markup: it is escaped, shown as written
 ## Organization
 A **GitHub organization** URL in the same form: `GET /?repo=<organization URL>`, as in [analysis.md](analysis.md#organization)
+- **Progress** as the page loads: what the scan is doing, `Listed 3 of 40 repositories of <organization>…`,
+  `Read the skills of 2 of 5 repositories…`; only the latest one shown, none once the page has what it found; no script
 - `<organization> · N repositories with skills`, linked to the organization; the warnings
 - A **chooser** of the repositories with skills, sorted by **id**: `<owner>/<repo> · N skills`; nothing chosen yet.
   *No script*: a form, `Show skills` submits it
 - Choosing one is `GET /?org=<organization URL>&repo=<repository URL>`: the chooser again, the repository chosen,
   then the repository's skills, as above; the filter keeps the organization
-- Nothing stored: each such page lists the organization *again*, next to the repository's scan; without
-  `GITHUB_TOKEN`, a request per repository of the organization; with it, two code searches or more (10 a minute)
+- Scanning the organization reads every repository's skills too, as a scan of it does, and **keeps** them, in memory:
+  choosing a repository then shows its skills **at once**, *no request* to GitHub, the filter too; as they were scanned
+  - Kept *10 minutes*, the *10* organizations scanned last; the organization's page always scans again
+  - Not kept, or a repository it has no skills in → listed, kept again, and the repository scanned, as before;
+    without `GITHUB_TOKEN`, a request per repository of the organization; with it, two code searches or more (10 a minute)
+  - A repository whose skills cannot be read → a *warning*; chosen, it is scanned
 - The organization cannot be listed → the repository is still shown, a *warning* instead of the chooser;
   `org` not an organization URL → the clear message, status 400
 - No repository with skills → `No repositories with skills found.`, no chooser
+- A failure once the progress is on the page, the rate limit say → the clear message on the page, after it:
+  the status is already 200
 ## Errors
 - Not a GitHub URL, or an unreachable repository or organization → the clear message on the page, status 400
 - Another host → 403; another path → 404, `//<path>` too

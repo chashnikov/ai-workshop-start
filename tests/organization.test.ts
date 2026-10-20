@@ -6,8 +6,9 @@ import { once } from 'node:events';
 import type { AddressInfo } from 'node:net';
 import { after, test } from 'node:test';
 import { run } from '../src/commands.ts';
-import { openGitHub, parseGitHubOrganizationUrl, parseGitHubUrl, scanOrganization } from '../src/core/github.ts';
+import { openGitHub, parseGitHubOrganizationUrl, parseGitHubUrl, scanOrganization, type Fetch } from '../src/core/github.ts';
 import { replay, type Recording } from '../src/core/replay.ts';
+import { scan } from '../src/core/scan.ts';
 import { createWebServer } from '../src/web.ts';
 
 const API = 'https://api.github.com';
@@ -41,10 +42,10 @@ function tree(id: string, paths: string[], ref = 'main'): Recording {
 }
 
 /** A repository, for scanning it: its default branch at COMMIT, its tree and its files. */
-function repository(id: string, files: Record<string, string>): Recording {
+function repository(id: string, files: Record<string, string>, branch = 'main'): Recording {
   const recording: Recording = {
-    [`${API}/repos/${id}`]: { status: 200, body: { full_name: id, default_branch: 'main' } },
-    [`${API}/repos/${id}/commits/main`]: { status: 200, body: { sha: COMMIT } },
+    [`${API}/repos/${id}`]: { status: 200, body: { full_name: id, default_branch: branch } },
+    [`${API}/repos/${id}/commits/${branch}`]: { status: 200, body: { sha: COMMIT } },
     [`${API}/repos/${id}/git/trees/${COMMIT}?recursive=1`]: {
       status: 200,
       body: { truncated: false, tree: Object.keys(files).map((path) => ({ path, mode: '100644', type: 'blob', sha: COMMIT })) },
@@ -79,7 +80,10 @@ const ACME: Recording = {
   [`${API}/repos/Acme/agents/commits/release/1`]: { status: 200, body: { sha: COMMIT } },
   ...tree('Acme/agents', ['agent/skills/deploy/SKILL.md'], COMMIT),
   ...tree('Acme/forked', ['.claude/skills/upstream/SKILL.md']),
+  // For reading their skills: each repository with skills at its commit.
   ...repository('Acme/tools', TOOLS),
+  ...repository('Acme/agents', { 'agent/skills/deploy/SKILL.md': skill('deploy') }, 'release/1'),
+  ...repository('Acme/forked', { '.claude/skills/upstream/SKILL.md': skill('upstream') }),
   // With a token: a code search over the organization, which finds other files named SKILL.md too...
   [`${API}/search/code?q=filename:SKILL.md+org:Acme&per_page=100&page=1`]: {
     status: 200,
@@ -125,21 +129,31 @@ const PLAIN: Recording = {
   ...tree('Plain/site', ['README.md']),
 };
 
+/** Limited, an organization GitHub stops answering for: the rate limit. */
+const LIMITED: Recording = {
+  ...owner('Limited', 'Organization'),
+  ...list(`${API}/orgs/Limited/repos?type=all`, [{ id: 'Limited/a' }, { id: 'Limited/b' }]),
+  [`${API}/repos/Limited/a/git/trees/main?recursive=1`]: { status: 403, body: { message: 'API rate limit exceeded for 192.0.2.1.' } },
+  ...tree('Limited/b', ['.claude/skills/b/SKILL.md']),
+};
+
 const NOBODY: Recording = { [`${API}/users/Nobody`]: { status: 404, body: { message: 'Not Found' } } };
 
-const github = replay({ ...ACME, ...OCTO, ...PLAIN, ...NOBODY });
+const github = replay({ ...ACME, ...OCTO, ...PLAIN, ...LIMITED, ...NOBODY });
 
 /** `skill-atlas <args>`, as the CLI runs it, with GitHub answering from the recordings above. */
 async function atlas(args: string[], fetch = github, token?: string) {
   const stdout: string[] = [];
   const stderr: string[] = [];
+  const progress: string[] = [];
   const code = await run(args, {
     open: (input) => openGitHub(input, { fetch, token }),
-    organization: (input) => scanOrganization(input, { fetch, token }),
+    organization: (input, progress) => scanOrganization(input, { fetch, token, progress }),
     print: (text) => stdout.push(text),
     error: (text) => stderr.push(text),
+    progress: (text) => progress.push(text),
   });
-  return { code, stdout: stdout.join('\n'), stderr: stderr.join('\n') };
+  return { code, stdout: stdout.join('\n'), stderr: stderr.join('\n'), progress };
 }
 
 const ACME_OUTPUT = [
@@ -269,13 +283,7 @@ test('GITHUB_TOKEN: at most 1000 SKILL.md files from each code search, a warning
 });
 
 test('the rate limit → the clear message, the scan stops, exit code 1', async () => {
-  const limited = replay({
-    ...owner('Limited', 'Organization'),
-    ...list(`${API}/orgs/Limited/repos?type=all`, [{ id: 'Limited/a' }, { id: 'Limited/b' }]),
-    [`${API}/repos/Limited/a/git/trees/main?recursive=1`]: { status: 403, body: { message: 'API rate limit exceeded for 192.0.2.1.' } },
-    ...tree('Limited/b', ['.claude/skills/b/SKILL.md']),
-  });
-  const result = await atlas(['scan', 'https://github.com/Limited'], limited);
+  const result = await atlas(['scan', 'https://github.com/Limited']);
   assert.equal(result.code, 1);
   assert.equal(result.stdout, '');
   assert.equal(result.stderr, 'GitHub rate limit reached; set GITHUB_TOKEN');
@@ -311,11 +319,65 @@ test('unknown organization → a clear message, exit code 1', async () => {
   assert.equal(result.stderr, 'Organization not found: https://github.com/Nobody');
 });
 
+test('scan <organization URL>: the progress as it goes, cleared before the result', async () => {
+  const result = await atlas(['scan', 'https://github.com/Acme']);
+  assert.deepEqual(result.progress, [
+    'Listing the repositories of Acme…',
+    ...[0, 1, 2, 3, 4, 5].map((done) => `Listed ${done} of 5 repositories of Acme…`),
+    '',
+  ]);
+  const searched = await atlas(['scan', 'https://github.com/Acme'], github, 'test');
+  assert.deepEqual(searched.progress, ['Searching the repositories of Acme for SKILL.md files…', '']);
+  // A failure clears it too.
+  assert.deepEqual((await atlas(['scan', 'https://github.com/Nobody'])).progress, ['']);
+});
+
+test('reading the skills as the organization is scanned: each repository as a scan of it shows it, pinned to its commit', async () => {
+  const progress: string[] = [];
+  const result = await scanOrganization('https://github.com/Acme', { fetch: github, read: true, progress: (message) => progress.push(message) });
+  const tools = result.repositories.find((repository) => repository.id === 'Acme/tools')!;
+  assert.deepEqual(tools.result, await scan(await openGitHub('https://github.com/Acme/tools', { fetch: github })));
+  assert.deepEqual(
+    result.repositories.map(({ id, skills, result }) => ({ id, skills, names: result?.skills.map((skill) => `${skill.name}@${skill.commit}`) })),
+    [
+      { id: 'Acme/agents', skills: 1, names: [`deploy@${COMMIT}`] },
+      { id: 'Acme/forked', skills: 1, names: [`upstream@${COMMIT}`] },
+      { id: 'Acme/tools', skills: 2, names: [`review@${COMMIT}`, `testing@${COMMIT}`] },
+    ],
+  );
+  assert.deepEqual(progress.slice(-4), [0, 1, 2, 3].map((done) => `Read the skills of ${done} of 3 repositories…`));
+});
+
+test('reading the skills: a repository that cannot be read is a warning, still listed, and the scan goes on', async () => {
+  const unread = replay({
+    ...owner('Half', 'Organization'),
+    ...list(`${API}/orgs/Half/repos?type=all`, [{ id: 'Half/gone' }, { id: 'Half/here' }]),
+    ...tree('Half/gone', ['.claude/skills/a/SKILL.md']),
+    ...tree('Half/here', ['.claude/skills/b/SKILL.md']),
+    [`${API}/repos/Half/gone`]: { status: 404, body: { message: 'Not Found' } },
+    ...repository('Half/here', { '.claude/skills/b/SKILL.md': skill('b') }),
+  });
+  const result = await scanOrganization('https://github.com/Half', { fetch: unread, read: true });
+  assert.deepEqual(
+    result.repositories.map(({ id, skills, result }) => ({ id, skills, read: Boolean(result) })),
+    [
+      { id: 'Half/gone', skills: 1, read: false },
+      { id: 'Half/here', skills: 1, read: true },
+    ],
+  );
+  assert.deepEqual(result.warnings, ['Half/gone: its skills cannot be read: Repository not found: https://github.com/Half/gone']);
+});
+
 // The web view.
 
+/** Every request to GitHub the web view makes, and its clock. */
+const requests: string[] = [];
+const counted: Fetch = (url, init) => (requests.push(url), github(url, init));
+let clock = 0;
 const server = createWebServer({
-  open: (input) => openGitHub(input, { fetch: github }),
-  organization: (input) => scanOrganization(input, { fetch: github }),
+  open: (input) => openGitHub(input, { fetch: counted }),
+  organization: (input, progress) => scanOrganization(input, { fetch: counted, read: true, progress }),
+  now: () => clock,
 });
 server.listen(0, '127.0.0.1');
 await once(server, 'listening');
@@ -365,6 +427,7 @@ test('web: an organization URL → its id, linked, the number of repositories wi
 });
 
 test('web: choosing a repository → the chooser again, the repository chosen, then its skills', async () => {
+  clock += 60 * 60 * 1000; // the organization is no longer kept: scanned again
   const page = await get(`org=${encodeURIComponent('https://github.com/Acme')}&repo=${encodeURIComponent('https://github.com/Acme/tools')}`);
   assert.equal(page.status, 200);
   const chosen = chooser(page.html);
@@ -388,6 +451,112 @@ test('web: the organization cannot be listed → the chosen repository is still 
   assert.equal(chooser(page.html), undefined);
   assert.match(page.html, /<li>warning: no repository chooser: Organization not found: https:\/\/github.com\/Nobody<\/li>/);
   assert.match(page.html, /<h2 class="repository"><a href="https:\/\/github.com\/Acme\/tools">Acme\/tools<\/a> · 2 skills/);
+});
+
+test('web: the organization page shows the progress as it loads, then only what it found', async () => {
+  // The tree of Acme/tools answers only once the first part of the page has arrived.
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  const slow = createWebServer({
+    open: (input) => openGitHub(input, { fetch: github }),
+    organization: (input, progress) =>
+      scanOrganization(input, { fetch: async (url, init) => (url.includes('Acme/tools/git/trees') && (await held), github(url, init)), read: true, progress }),
+  });
+  slow.listen(0, '127.0.0.1');
+  await once(slow, 'listening');
+  after(() => slow.close());
+  const response = await fetch(`http://127.0.0.1:${(slow.address() as AddressInfo).port}/?repo=github.com%2FAcme`);
+  assert.equal(response.status, 200);
+  const reader = response.body!.pipeThrough(new TextDecoderStream()).getReader();
+  let html = '';
+  while (!html.includes('Listed 0 of 5 repositories of Acme…')) html += (await reader.read()).value;
+  assert.doesNotMatch(html, /class="chooser"|<\/html>/);
+  release();
+  for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read()) html += chunk.value;
+  const progress = /<div class="progress" role="status">\n([\s\S]*?)<\/div>\n<h2 class="organization">/.exec(html)?.[1];
+  assert.deepEqual(progress?.trim().split('\n'), [
+    '<p>Listing the repositories of Acme…</p>',
+    ...[0, 1, 2, 3, 4, 5].map((done) => `<p>Listed ${done} of 5 repositories of Acme…</p>`),
+    ...[0, 1, 2, 3].map((done) => `<p>Read the skills of ${done} of 3 repositories…</p>`),
+  ]);
+  assert.equal(chooser(html)?.options.length, 4);
+  // Only the latest progress, and none once the page has what it found: CSS, no script.
+  assert.match(html, /\.progress p:not\(:last-child\), \.progress:not\(:last-child\) \{ display: none; \}/);
+  assert.doesNotMatch(html, /<script/);
+  assert.ok(html.endsWith('</main>\n</body>\n</html>\n'));
+});
+
+test('web: choosing a repository of an organization just scanned → its skills at once, with no request to GitHub', async () => {
+  await get(`repo=${encodeURIComponent('https://github.com/Acme')}`);
+  requests.length = 0;
+  const chosen = `org=${encodeURIComponent('https://github.com/acme')}&repo=${encodeURIComponent('https://github.com/acme/TOOLS')}`;
+  const page = await get(chosen);
+  assert.equal(page.status, 200);
+  assert.equal(requests.length, 0, requests.join(" "));
+  assert.equal(chooser(page.html)?.options.find((option) => option.selected)?.value, 'https://github.com/Acme/tools');
+  assert.deepEqual([...page.html.matchAll(/<span class="name">([^<]*)<\/span>/g)].map(([, name]) => name), ['review', 'testing']);
+  assert.ok(page.html.includes(`https://github.com/Acme/tools/blob/${COMMIT}/.agents/skills/review/SKILL.md`));
+  // With a filter, sent with Enter without the script: at once too.
+  await get(`${chosen}&filter=test`);
+  assert.equal(requests.length, 0, requests.join(" "));
+  // A repository the organization has no skills in, or another organization: scanned as before.
+  await get(`org=${encodeURIComponent('https://github.com/Acme')}&repo=${encodeURIComponent('https://github.com/Acme/docs')}`);
+  assert.ok(requests.includes(`${API}/repos/Acme/docs`));
+});
+
+test('web: an organization is kept for 10 minutes, then scanned again; the organization page always scans', async () => {
+  await get(`repo=${encodeURIComponent('https://github.com/Acme')}`);
+  const chosen = `org=${encodeURIComponent('https://github.com/Acme')}&repo=${encodeURIComponent('https://github.com/Acme/tools')}`;
+  clock += 10 * 60 * 1000 - 1;
+  requests.length = 0;
+  await get(chosen);
+  assert.equal(requests.length, 0, requests.join(" "));
+  clock += 1;
+  await get(chosen);
+  assert.ok(requests.includes(`${API}/users/Acme`));
+  // Scanned again: kept again.
+  requests.length = 0;
+  await get(chosen);
+  assert.equal(requests.length, 0, requests.join(" "));
+  await get(`repo=${encodeURIComponent('https://github.com/Acme')}`);
+  assert.ok(requests.includes(`${API}/users/Acme`));
+});
+
+test('web: at most the 10 organizations scanned last are kept', async () => {
+  const names = Array.from({ length: 11 }, (_, n) => `Org${n}`);
+  const many = replay(
+    Object.assign(
+      {},
+      ...names.map((name) => ({
+        ...owner(name, 'Organization'),
+        ...list(`${API}/orgs/${name}/repos?type=all`, [{ id: `${name}/r` }]),
+        ...tree(`${name}/r`, ['.claude/skills/a/SKILL.md']),
+        ...repository(`${name}/r`, { '.claude/skills/a/SKILL.md': skill('a') }),
+      })),
+    ),
+  );
+  const asked: string[] = [];
+  const kept = createWebServer({
+    open: (input) => openGitHub(input, { fetch: many }),
+    organization: (input, progress) => scanOrganization(input, { fetch: (url, init) => (asked.push(url), many(url, init)), read: true, progress }),
+  });
+  kept.listen(0, '127.0.0.1');
+  await once(kept, 'listening');
+  after(() => kept.close());
+  const at = `http://127.0.0.1:${(kept.address() as AddressInfo).port}/`;
+  for (const name of names) await (await fetch(`${at}?repo=github.com%2F${name}`)).text();
+  asked.length = 0;
+  for (const name of names.slice(1)) await (await fetch(`${at}?org=github.com%2F${name}&repo=github.com%2F${name}%2Fr`)).text();
+  assert.equal(asked.length, 0, asked.join(" "));
+  await (await fetch(`${at}?org=github.com%2FOrg0&repo=github.com%2FOrg0%2Fr`)).text();
+  assert.ok(asked.includes(`${API}/users/Org0`));
+});
+
+test('web: a failure once the progress is on the page → the message on the page, after it', async () => {
+  const page = await get(`repo=${encodeURIComponent('https://github.com/Limited')}`);
+  assert.equal(page.status, 200);
+  assert.match(page.html, /<p>Listed 0 of 2 repositories of Limited…<\/p>\n(?:<p>[^<]*<\/p>\n)*<\/div>\n<p class="error">GitHub rate limit reached; set GITHUB_TOKEN<\/p><\/main>/);
+  assert.equal(chooser(page.html), undefined);
 });
 
 test('web: no repository with skills → "No repositories with skills found.", no chooser', async () => {

@@ -20,3 +20,4 @@ JetBrains/kotlin · 6 skills
   https://github.com/JetBrains/kotlin
 ```
 - Only the repositories with skills, sorted by **id**; `./skill-atlas scan <repository URL>` shows the skills of one
+- The **progress** on *stderr*, on one line, cleared before the result: on a terminal only, nothing in a file or a pipe

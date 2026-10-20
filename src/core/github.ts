@@ -1,6 +1,6 @@
 import { AtlasError, RateLimitError } from './errors.ts';
 import { findSkills, SKILL_ROOTS } from './find.ts';
-import type { Source } from './scan.ts';
+import { scan, type ScanResult, type Source } from './scan.ts';
 
 /** The part of `fetch` the core uses, so tests and the browser can pass their own. */
 export type Fetch = (url: string, init?: { headers?: Record<string, string> }) => Promise<Response>;
@@ -33,14 +33,24 @@ export async function openGitHub(input: string, options: GitHubOptions): Promise
   const name = parseGitHubUrl(input);
   if (!name) throw new AtlasError(`Not a GitHub repository URL: ${input}`);
   const github = client(options);
-  const info = await github.json<{ full_name: string; default_branch: string }>(
-    `${API}/repos/${name.owner}/${name.repo}`,
-    `Repository not found: https://github.com/${name.owner}/${name.repo}`,
-  );
-  const id = info.full_name;
-  const { sha } = await github.json<{ sha: string }>(`${API}/repos/${id}/commits/${encodePath(info.default_branch)}`);
+  const { id, sha } = await head(github, `${name.owner}/${name.repo}`);
   const warnings: string[] = [];
   const paths = options.token ? await searchPaths(github, id, warnings) : await treePaths(github, id, sha, warnings);
+  return source(github, id, sha, paths, warnings);
+}
+
+/** The repository's own id and its default branch's commit. */
+async function head(github: Client, name: string): Promise<{ id: string; sha: string }> {
+  const info = await github.json<{ full_name: string; default_branch: string }>(
+    `${API}/repos/${name}`,
+    `Repository not found: https://github.com/${name}`,
+  );
+  const { sha } = await github.json<{ sha: string }>(`${API}/repos/${info.full_name}/commits/${encodePath(info.default_branch)}`);
+  return { id: info.full_name, sha };
+}
+
+/** The repository at the commit, its files read from there. */
+function source(github: Client, id: string, sha: string, paths: string[], warnings: string[]): Source {
   const [organization, repo] = id.split('/');
   return {
     repository: { id, organization, name: repo, url: `https://github.com/${id}`, commit: sha },
@@ -78,8 +88,8 @@ async function search(github: Client, qualifiers: string, warnings: string[], wh
   return [...found.values()];
 }
 
-/** A repository of an organization that has skills, and how many. */
-export type OrganizationRepository = { id: string; url: string; skills: number };
+/** A repository of an organization that has skills, and how many; its skills too, when they were read. */
+export type OrganizationRepository = { id: string; url: string; skills: number; result?: ScanResult };
 
 export type OrganizationResult = {
   /** The organization's, or the user's, login and page. */
@@ -89,17 +99,25 @@ export type OrganizationResult = {
   warnings: string[];
 };
 
-/** How many repositories are listed at the same time, without a token. */
+export type OrganizationOptions = GitHubOptions & {
+  /** Also reads each repository's skills, as a scan of it does: its `result`, to be shown at once. */
+  read?: boolean;
+  /** What the scan is doing, as it goes: `Listed 3 of 40 repositories of Acme…`. */
+  progress?(message: string): void;
+};
+
+/** How many repositories are listed, or read, at the same time. */
 const PARALLEL = 8;
 
 /**
  * Every repository of an organization, or of a user, that has skills: with a token, through a code
- * search over all of them and one over the forks; without it, through each repository's tree at its default branch.
- * A repository that cannot be listed is a warning, and the scan goes on.
+ * search over all of them and one over the forks; without it, through each repository's tree at its
+ * default branch. A repository that cannot be listed, or read, is a warning, and the scan goes on.
  */
-export async function scanOrganization(input: string, options: GitHubOptions): Promise<OrganizationResult> {
+export async function scanOrganization(input: string, options: OrganizationOptions): Promise<OrganizationResult> {
   const name = parseGitHubOrganizationUrl(input);
   if (!name) throw new AtlasError(`Not a GitHub organization URL: ${input}`);
+  const progress = options.progress ?? (() => {});
   const github = client(options);
   const owner = await github.json<{ login: string; type: string }>(
     `${API}/users/${name}`,
@@ -107,14 +125,65 @@ export async function scanOrganization(input: string, options: GitHubOptions): P
   );
   const organization = owner.type === 'Organization';
   const warnings: string[] = [];
-  const paths = options.token
-    ? await searchOrganization(github, `${organization ? 'org' : 'user'}:${owner.login}`, warnings)
-    : await organizationTrees(github, options, organization ? `${API}/orgs/${owner.login}/repos?type=all` : `${API}/users/${owner.login}/repos?type=owner`, warnings);
-  const repositories = [...paths]
+  let paths: Map<string, string[]>;
+  if (options.token) {
+    progress(`Searching the repositories of ${owner.login} for SKILL.md files…`);
+    paths = await searchOrganization(github, `${organization ? 'org' : 'user'}:${owner.login}`, warnings);
+  } else {
+    progress(`Listing the repositories of ${owner.login}…`);
+    const list = organization ? `${API}/orgs/${owner.login}/repos?type=all` : `${API}/users/${owner.login}/repos?type=owner`;
+    paths = await organizationTrees(github, options, list, warnings, (done, total) => progress(`Listed ${done} of ${total} repositories of ${owner.login}…`));
+  }
+  const repositories: OrganizationRepository[] = [...paths]
     .map(([id, files]) => ({ id, url: `https://github.com/${id}`, skills: findSkills(files).length }))
     .filter((repository) => repository.skills > 0)
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  if (options.read) await readOrganization(options, repositories, paths, warnings, (done, total) => progress(`Read the skills of ${done} of ${total} repositories…`));
   return { organization: { id: owner.login, url: `https://github.com/${owner.login}` }, repositories, warnings };
+}
+
+/** Each repository's skills, at its default branch's commit, from the files the listing found. */
+async function readOrganization(
+  options: GitHubOptions,
+  repositories: OrganizationRepository[],
+  paths: Map<string, string[]>,
+  warnings: string[],
+  progress: (done: number, total: number) => void,
+): Promise<void> {
+  const read: string[][] = repositories.map(() => []); // the warnings, in the listed order
+  let done = 0;
+  progress(done, repositories.length);
+  await inParallel(repositories, async (repository, index) => {
+    const own = client(options); // its answers are dropped once the repository is read
+    try {
+      const { id, sha } = await head(own, repository.id);
+      repository.result = await scan(source(own, id, sha, paths.get(repository.id) ?? [], []));
+      repository.skills = repository.result.skills.length;
+    } catch (error) {
+      if (error instanceof RateLimitError || !(error instanceof AtlasError)) throw error;
+      read[index].push(`${repository.id}: its skills cannot be read: ${error.message}`);
+    }
+    progress(++done, repositories.length);
+  });
+  warnings.push(...read.flat());
+}
+
+/** `each` for every item, PARALLEL at a time; once one has failed, no more are started. */
+async function inParallel<T>(items: T[], each: (item: T, index: number) => Promise<void>): Promise<void> {
+  let next = 0;
+  let stopped = false;
+  async function worker() {
+    while (!stopped && next < items.length) {
+      const index = next++;
+      try {
+        await each(items[index], index);
+      } catch (error) {
+        stopped = true;
+        throw error;
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(PARALLEL, items.length) }, worker));
 }
 
 /**
@@ -132,7 +201,13 @@ async function searchOrganization(github: Client, qualifier: string, warnings: s
 }
 
 /** Each repository's tree at its default branch, a few at a time: the files that may be skills, by repository. */
-async function organizationTrees(github: Client, options: GitHubOptions, list: string, warnings: string[]): Promise<Map<string, string[]>> {
+async function organizationTrees(
+  github: Client,
+  options: GitHubOptions,
+  list: string,
+  warnings: string[],
+  progress: (done: number, total: number) => void,
+): Promise<Map<string, string[]>> {
   const repositories: { full_name: string; default_branch: string }[] = [];
   for (let page = 1; ; page++) {
     const result = await github.json<{ full_name: string; default_branch: string }[]>(`${list}&per_page=100&page=${page}`);
@@ -141,26 +216,19 @@ async function organizationTrees(github: Client, options: GitHubOptions, list: s
   }
   // In the listed order, however the requests finish.
   const listed: { paths?: string[]; warnings: string[] }[] = repositories.map(() => ({ warnings: [] }));
-  let next = 0;
-  let stopped = false; // once the scan has failed, the other workers take no more repositories
-  async function worker() {
-    while (!stopped && next < repositories.length) {
-      const index = next++;
-      const { full_name: id, default_branch: branch } = repositories[index];
-      // A client of its own: its answers, a whole tree among them, are dropped once the repository is listed.
-      const own = client(options);
-      try {
-        listed[index].paths = await treePaths(own, id, await treeRef(own, id, branch), listed[index].warnings);
-      } catch (error) {
-        if (error instanceof RateLimitError || !(error instanceof AtlasError)) {
-          stopped = true;
-          throw error;
-        }
-        listed[index].warnings.push(`cannot be listed: ${error.message}; skipped`);
-      }
+  let done = 0;
+  progress(done, repositories.length);
+  await inParallel(repositories, async ({ full_name: id, default_branch: branch }, index) => {
+    // A client of its own: its answers, a whole tree among them, are dropped once the repository is listed.
+    const own = client(options);
+    try {
+      listed[index].paths = await treePaths(own, id, await treeRef(own, id, branch), listed[index].warnings);
+    } catch (error) {
+      if (error instanceof RateLimitError || !(error instanceof AtlasError)) throw error;
+      listed[index].warnings.push(`cannot be listed: ${error.message}; skipped`);
     }
-  }
-  await Promise.all(Array.from({ length: Math.min(PARALLEL, repositories.length) }, worker));
+    progress(++done, repositories.length);
+  });
   const paths = new Map<string, string[]>();
   repositories.forEach(({ full_name: id }, index) => {
     if (listed[index].paths) paths.set(id, listed[index].paths);
