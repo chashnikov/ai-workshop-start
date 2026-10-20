@@ -11,14 +11,16 @@
     "node": ">=24"
   },
   "scripts": {
-    "test": "node --test tests/*.test.ts",
+    "test": "node --test tests/*.test.ts && playwright test",
     "typecheck": "tsc --noEmit",
-    "demo": "node scripts/record-demo.ts"
+    "demo": "node scripts/record-demo.ts",
+    "test:screenshots": "playwright test"
   },
   "dependencies": {
     "yaml": "^2.9.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.64.1",
     "@types/node": "^24.19.0",
     "playwright": "^1.64.1",
     "typescript": "^7.0.2"
