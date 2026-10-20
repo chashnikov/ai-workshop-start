@@ -49,14 +49,25 @@ async function head(github: Client, name: string): Promise<{ id: string; sha: st
   return { id: info.full_name, sha };
 }
 
-/** The repository at the commit, its files read from there. */
-function source(github: Client, id: string, sha: string, paths: string[], warnings: string[]): Source {
+/**
+ * The repository at the commit, its files read from there. When they were last updated, PARALLEL at
+ * a time: hundreds of skills at once would be GitHub's secondary rate limit. An organization's read
+ * passes its own `limited`, for all of its repositories.
+ */
+function source(github: Client, id: string, sha: string, paths: string[], warnings: string[], limited = limit(PARALLEL)): Source {
   const [organization, repo] = id.split('/');
   return {
     repository: { id, organization, name: repo, url: `https://github.com/${id}`, commit: sha },
     paths,
     warnings,
     read: (path) => github.raw(`${RAW}/${id}/${sha}/${encodePath(path)}`),
+    // The last commit to the file, up to the scanned one: a request per skill.
+    async updated(path) {
+      const commits = await limited(() =>
+        github.json<{ commit: { committer: { date: string } } }[]>(`${API}/repos/${id}/commits?sha=${sha}&path=${encodePath(path)}&per_page=1`),
+      );
+      return commits[0]?.commit.committer.date ?? '';
+    },
   };
 }
 
@@ -100,7 +111,10 @@ export type OrganizationResult = {
 };
 
 export type OrganizationOptions = GitHubOptions & {
-  /** Also reads each repository's skills, as a scan of it does: its `result`, to be shown at once. */
+  /**
+   * Also reads each repository's skills, as the web view's scan of it does, when each was last updated
+   * too: its `result`, to be shown at once.
+   */
   read?: boolean;
   /** What the scan is doing, as it goes: `Listed 3 of 40 repositories of Acme…`. */
   progress?(message: string): void;
@@ -162,6 +176,8 @@ async function readOrganization(
 ): Promise<void> {
   const read: string[][] = repositories.map(() => []); // the warnings, in the listed order
   let limited: RateLimitError | undefined;
+  // The repositories are read PARALLEL at a time: their last updates too, all of them together.
+  const updates = limit(PARALLEL);
   let done = 0;
   progress(done, repositories.length);
   await inParallel(repositories, async (repository, index) => {
@@ -173,7 +189,7 @@ async function readOrganization(
       const { id, sha } = listing.branch
         ? { id: repository.id, sha: (await own.json<{ sha: string }>(`${API}/repos/${repository.id}/commits/${encodePath(listing.branch)}`)).sha }
         : await head(own, repository.id);
-      repository.result = await scan(source(own, id, sha, listing.paths, [...listing.warnings]));
+      repository.result = await scan(source(own, id, sha, listing.paths, [...listing.warnings], updates), { updated: true });
       repository.skills = repository.result.skills.length;
     } catch (error) {
       if (error instanceof RateLimitError) return void (limited = error);
@@ -203,6 +219,26 @@ async function inParallel<T>(items: T[], each: (item: T, index: number) => Promi
     }
   }
   await Promise.all(Array.from({ length: Math.min(PARALLEL, items.length) }, worker));
+}
+
+/**
+ * Runs the tasks given to it, at most `count` at a time, the others as those finish. A finished task
+ * hands its place to the next one waiting: `running` never drops in between, for a newcomer to take it.
+ */
+export function limit(count: number): <T>(task: () => Promise<T>) => Promise<T> {
+  let running = 0;
+  const waiting: (() => void)[] = [];
+  return async (task) => {
+    if (running >= count) await new Promise<void>((resolve) => waiting.push(resolve));
+    else running++;
+    try {
+      return await task();
+    } finally {
+      const next = waiting.shift();
+      if (next) next();
+      else running--;
+    }
+  };
 }
 
 /** Code search over the whole organization, which leaves out forks: the files that may be skills, by repository. */

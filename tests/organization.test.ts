@@ -6,7 +6,8 @@ import { once } from 'node:events';
 import type { AddressInfo } from 'node:net';
 import { after, test } from 'node:test';
 import { run } from '../src/commands.ts';
-import { openGitHub, parseGitHubOrganizationUrl, parseGitHubUrl, scanOrganization, type Fetch } from '../src/core/github.ts';
+import { limit, openGitHub, parseGitHubOrganizationUrl, parseGitHubUrl, scanOrganization, type Fetch } from '../src/core/github.ts';
+import { history } from '../src/core/fixture.ts';
 import { replay, type Recording } from '../src/core/replay.ts';
 import { scan } from '../src/core/scan.ts';
 import { createWebServer } from '../src/web.ts';
@@ -53,6 +54,7 @@ function repository(id: string, files: Record<string, string>, branch = 'main'):
   };
   for (const [path, body] of Object.entries(files)) {
     recording[`https://raw.githubusercontent.com/${id}/${COMMIT}/${path}`] = { status: 200, body };
+    Object.assign(recording, history(id, COMMIT, path, '2026-10-01T12:00:00Z'));
   }
   return recording;
 }
@@ -328,7 +330,8 @@ test('reading the skills as the organization is scanned: each repository as a sc
   const progress: string[] = [];
   const result = await scanOrganization('https://github.com/Acme', { fetch: github, read: true, progress: (message) => progress.push(message) });
   const tools = result.repositories.find((repository) => repository.id === 'Acme/tools')!;
-  assert.deepEqual(tools.result, await scan(await openGitHub('https://github.com/Acme/tools', { fetch: github })));
+  // As the web view's scan of it: when each skill was last updated too.
+  assert.deepEqual(tools.result, await scan(await openGitHub('https://github.com/Acme/tools', { fetch: github }), { updated: true }));
   assert.deepEqual(
     result.repositories.map(({ id, skills, result }) => ({ id, skills, names: result?.skills.map((skill) => `${skill.name}@${skill.commit}`) })),
     [
@@ -368,6 +371,69 @@ test('reading the skills: the rate limit stops the reading, not the scan; the li
   assert.equal(result.warnings.at(-1), 'the skills of 2 repositories were not read: GitHub rate limit reached; set GITHUB_TOKEN');
 });
 
+test('reading the skills: the rate limit while the last updates are read stops the reading too; those not read are not kept', async () => {
+  // GitHub's API stops answering once the first commits are asked for; the files are not its API.
+  let limited = false;
+  const fetch: Fetch = async (url, init) => {
+    limited ||= url.includes('/commits?');
+    return limited && url.startsWith(API) ? new Response(JSON.stringify({ message: 'API rate limit exceeded for 192.0.2.1.' }), { status: 403 }) : github(url, init);
+  };
+  const result = await scanOrganization('https://github.com/Acme', { fetch, read: true });
+  assert.deepEqual(
+    result.repositories.map(({ id, result }) => ({ id, read: Boolean(result) })),
+    [
+      { id: 'Acme/agents', read: false },
+      { id: 'Acme/tools', read: false },
+    ],
+  );
+  assert.equal(result.warnings.at(-1), 'the skills of 2 repositories were not read: GitHub rate limit reached; set GITHUB_TOKEN');
+  assert.doesNotMatch(result.warnings.join('\n'), /last update/);
+});
+
+test('reading the skills: at most 8 requests for the last updates at the same time, for all the repositories together', async () => {
+  const names = Array.from({ length: 10 }, (_, n) => `Many/r${n}`);
+  const files = Object.fromEntries(Array.from({ length: 10 }, (_, n) => [`.claude/skills/s${n}/SKILL.md`, skill(`s${n}`)]));
+  const recorded = replay({
+    ...owner('Many', 'Organization'),
+    ...list(`${API}/orgs/Many/repos?type=all`, names.map((id) => ({ id }))),
+    ...Object.assign({}, ...names.map((id) => ({ ...tree(id, Object.keys(files)), ...repository(id, files) }))),
+  });
+  let running = 0;
+  let most = 0;
+  const fetch: Fetch = async (url, init) => {
+    if (!url.includes('/commits?')) return recorded(url, init);
+    most = Math.max(most, ++running);
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    running--;
+    return recorded(url, init);
+  };
+  const result = await scanOrganization('https://github.com/Many', { fetch, read: true });
+  assert.deepEqual(result.repositories.map(({ result }) => result?.skills.filter((skill) => skill.updated).length), names.map(() => 10));
+  assert.equal(most, 8);
+});
+
+test('the limit of requests at the same time: a finished one hands its place to one waiting, not to one arriving', async () => {
+  let running = 0;
+  let most = 0;
+  const run = limit(2);
+  const work = (until: Promise<void>) => async () => {
+    most = Math.max(most, ++running);
+    await until;
+    running--;
+  };
+  const never = new Promise<void>(() => {});
+  let end!: () => void;
+  let first!: Promise<void>;
+  void run(() => (first = work(new Promise<void>((resolve) => (end = resolve)))()));
+  void run(work(never));
+  void run(work(never)); // waits for a place
+  // Arrives as the first one ends, just after the limit sees it end: before the one waiting goes on.
+  void first.then(() => run(work(never)));
+  end();
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(most, 2);
+});
+
 test('reading the skills: a repository whose tree is too large keeps its warning, as a scan of it does', async () => {
   const entries = (items: { path: string; type: string; sha: string }[]) => ({ status: 200, body: { truncated: false, tree: items.map((item) => ({ mode: '100644', ...item })) } });
   const recording: Recording = {
@@ -386,7 +452,7 @@ test('reading the skills: a repository whose tree is too large keeps its warning
   const requests: string[] = [];
   const result = await scanOrganization('https://github.com/Large', { fetch: (url, init) => (requests.push(url), large(url, init)), read: true });
   const mono = result.repositories[0].result!;
-  assert.deepEqual(mono, await scan(await openGitHub('https://github.com/Large/mono', { fetch: large })));
+  assert.deepEqual(mono, await scan(await openGitHub('https://github.com/Large/mono', { fetch: large }), { updated: true }));
   assert.match(mono.warnings[0], /^the tree is too large to list at once; looked only in /);
   // Without a token, the list said the branch: the repository is not asked for again.
   assert.ok(!requests.includes(`${API}/repos/Large/mono`));
@@ -533,6 +599,8 @@ test('web: choosing a repository of an organization just scanned → its skills 
   assert.equal(chooser(page.html)?.options.find((option) => option.selected)?.value, 'https://github.com/Acme/tools');
   assert.deepEqual([...page.html.matchAll(/<span class="name">([^<]*)<\/span>/g)].map(([, name]) => name), ['review', 'testing']);
   assert.ok(page.html.includes(`https://github.com/Acme/tools/blob/${COMMIT}/.agents/skills/review/SKILL.md`));
+  // When each one was last updated: read with the organization, kept with it.
+  assert.equal([...page.html.matchAll(/<time class="updated" datetime="2026-10-01T12:00:00.000Z">Updated 2026-10-01 12:00 UTC<\/time>/g)].length, 2);
   // With a filter, sent with Enter without the script: at once too.
   await get(`${chosen}&filter=test`);
   assert.equal(requests.length, 0, requests.join(" "));

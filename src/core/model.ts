@@ -22,6 +22,11 @@ export type Skill = {
   body: string;
   /** The scanned commit, the one the link pins; empty for a local directory. */
   commit: string;
+  /**
+   * When the SKILL.md was last updated: the ISO time of the last commit to it, up to the scanned commit;
+   * empty for a local directory, or when it cannot be read.
+   */
+  updated: string;
   /** The same skill in other agents' folders. */
   copies: string[];
 };

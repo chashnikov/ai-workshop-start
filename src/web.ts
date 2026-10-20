@@ -99,7 +99,7 @@ export function createWebServer({ open, organization, now = Date.now }: WebOptio
         // Both at once: each one is requests to GitHub. If the organization fails, the repository is still shown.
         // Only listed, not read: the others are read as they are chosen.
         const listing = listed ?? (org ? organization!(org, { read: false }).then((result) => (keep(org, result), result), (failure: unknown) => (failure instanceof AtlasError ? failure : Promise.reject(failure))) : undefined);
-        [listed, scanned] = await Promise.all([listing, open(input).then(scan)]);
+        [listed, scanned] = await Promise.all([listing, open(input).then((source) => scan(source, { updated: true }))]);
         // Kept with the organization: chosen again, it is shown at once.
         const kept = listed instanceof AtlasError ? undefined : listed?.repositories.find((repository) => same(repository.id, input));
         if (kept) Object.assign(kept, { result: scanned, skills: scanned.skills.length });
@@ -262,7 +262,18 @@ ${org ? `<input type="hidden" name="org" value="${escape(org)}">\n` : ''}<input 
 
 function listItem(skill: Skill, anchor: string, shown: boolean): string {
   const summary = skill.description ? `<span class="summary">${escape(firstSentence(skill.description))}</span>` : '';
-  return `<li${shown ? '' : ' hidden'}><a href="#${anchor}"><span class="name">${escape(skill.name)}</span>${summary}</a></li>`;
+  return `<li${shown ? '' : ' hidden'}><a href="#${anchor}"><span class="name">${escape(skill.name)}</span>${summary}${updated(skill.updated)}</a></li>`;
+}
+
+/**
+ * `Updated 2026-10-20 15:05 UTC`: the same on every machine, with no script to show the reader's own time zone;
+ * nothing when it is not known.
+ */
+function updated(time: string): string {
+  const date = new Date(time);
+  if (!time || Number.isNaN(date.getTime())) return '';
+  const iso = date.toISOString();
+  return `<time class="updated" datetime="${iso}">Updated ${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC</time>`;
 }
 
 function detail(repository: Repository, skill: Skill, anchor: string, shown: boolean): string {
@@ -323,6 +334,7 @@ a { color: #0969da; }
 .list a:hover { background: #f6f8fa; }
 .list .name { display: block; font-weight: 600; }
 .list .summary { display: block; font-size: .8125rem; color: #59636e; }
+.list .updated { display: block; font-size: .75rem; color: #59636e; }
 .detail { display: none; border: 1px solid #d0d7de; border-radius: 6px; padding: 0 1rem 1rem; min-width: 0; }
 .detail:target:not([hidden]), .details:not(:has(.detail:target:not([hidden]))) .detail:nth-child(1 of :not([hidden])) { display: block; }
 /* Selecting a skill scrolls to it; a margin taller than the screen keeps the page at the top, the repository in view. */

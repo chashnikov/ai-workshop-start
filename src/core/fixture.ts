@@ -9,8 +9,32 @@ export const FIXTURE = fileURLToPath(new URL('../../fixture', import.meta.url));
 /** The commit GitHub answers for the repositories of onGitHub. */
 export const COMMIT = '0123456789abcdef0123456789abcdef01234567';
 
-/** What GitHub answers for JetBrains/<name>: a tree of the files, and the files at COMMIT. */
-export function onGitHub(name: string, files: Record<string, string>): Recording {
+/** When a file was last updated, unless `onGitHub` is told otherwise. */
+export const UPDATED = '2026-10-01T12:00:00Z';
+
+/** When ./fixture's skills were last updated, as GitHub answers for JetBrains/fixture. */
+export const FIXTURE_UPDATED: Record<string, string> = {
+  '.claude/skills/code-style/SKILL.md': '2026-09-14T08:12:45Z',
+  '.claude/skills/commits/SKILL.md': '2026-10-20T15:05:21Z',
+  '.agents/skills/release-checklist/SKILL.md': '2026-03-02T23:59:59Z',
+  'agent/skills/testing/SKILL.md': '2025-12-31T07:00:00Z',
+};
+
+/** The last commit to a file of `id`, up to `commit`, as GitHub answers it: at `date`. */
+export function history(id: string, commit: string, path: string, date: string): Recording {
+  return {
+    [`https://api.github.com/repos/${id}/commits?sha=${commit}&path=${path}&per_page=1`]: {
+      status: 200,
+      body: [{ sha: commit, commit: { committer: { date } } }],
+    },
+  };
+}
+
+/**
+ * What GitHub answers for JetBrains/<name>: a tree of the files, the files at COMMIT, and when each
+ * one was last updated: `updated`, else UPDATED.
+ */
+export function onGitHub(name: string, files: Record<string, string>, updated: Record<string, string> = {}): Recording {
   const recording: Recording = {
     [`https://api.github.com/repos/JetBrains/${name}`]: { status: 200, body: { full_name: `JetBrains/${name}`, default_branch: 'main' } },
     [`https://api.github.com/repos/JetBrains/${name}/commits/main`]: { status: 200, body: { sha: COMMIT } },
@@ -21,6 +45,7 @@ export function onGitHub(name: string, files: Record<string, string>): Recording
   };
   for (const [path, body] of Object.entries(files)) {
     recording[`https://raw.githubusercontent.com/JetBrains/${name}/${COMMIT}/${path}`] = { status: 200, body };
+    Object.assign(recording, history(`JetBrains/${name}`, COMMIT, path, updated[path] ?? UPDATED));
   }
   return recording;
 }
@@ -30,7 +55,7 @@ export function fixtureOnGitHub(): Recording {
   const paths = (readdirSync(FIXTURE, { recursive: true, withFileTypes: true }) as Dirent[])
     .filter((entry) => entry.isFile())
     .map((entry) => relative(FIXTURE, join(entry.parentPath, entry.name)));
-  return onGitHub('fixture', Object.fromEntries(paths.map((path) => [path, readFileSync(join(FIXTURE, path), 'utf8')])));
+  return onGitHub('fixture', Object.fromEntries(paths.map((path) => [path, readFileSync(join(FIXTURE, path), 'utf8')])), FIXTURE_UPDATED);
 }
 
 /**
