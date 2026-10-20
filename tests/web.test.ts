@@ -52,11 +52,17 @@ const SAME_NAME = onGitHub('same-name', {
   '.claude/skills/two/SKILL.md': '---\nname: review\ndescription: The second.\n---\nTwo.\n',
 });
 
+/** Two names with the same anchor: `skill-a-b`, then `skill-a-b-2`. */
+const SAME_ANCHOR = onGitHub('same-anchor', {
+  '.claude/skills/one/SKILL.md': '---\nname: a-b\ndescription: The first.\n---\nOne.\n',
+  '.claude/skills/two/SKILL.md': '---\nname: a.b\ndescription: The second.\n---\nTwo.\n',
+});
+
 /** No skills at all. */
 const EMPTY = onGitHub('empty', { 'README.md': '# Empty\n' });
 
 const requests: string[] = [];
-const github = replay({ ...EXAMPLE, ...fixtureOnGitHub(), ...MARKUP, ...SAME_NAME, ...EMPTY });
+const github = replay({ ...EXAMPLE, ...fixtureOnGitHub(), ...MARKUP, ...SAME_NAME, ...SAME_ANCHOR, ...EMPTY });
 const counted: Fetch = (url, init) => {
   requests.push(url);
   return github(url, init);
@@ -378,6 +384,10 @@ test('filter: the anchors stay those of the whole list; the first match is selec
   // A link to a hidden skill selects the first match: the CSS ignores a hidden :target.
   assert.match(page.html, /<section class="detail" id="skill-commits" hidden>/);
   assert.match(page.html, /\.skills:not\(:has\(\.detail:target:not\(\[hidden\]\)\)\) \.list li:nth-child\(1 of :not\(\[hidden\]\)\) a \{ background/);
+  // `.` drops `a-b`, the first of the two: `a.b` keeps its whole-list anchor, and is selected.
+  const anchor = await filtered('https://github.com/JetBrains/same-anchor', '.');
+  assert.deepEqual(list(anchor.html).map(({ anchor, name }) => ({ anchor, name })), [{ anchor: 'skill-a-b-2', name: 'a.b' }]);
+  assert.deepEqual([...details(anchor.html).keys()], ['skill-a-b-2']);
   const same = await filtered('https://github.com/JetBrains/same-name', 'view');
   assert.deepEqual(list(same.html).map((item) => item.anchor), ['skill-review', 'skill-review-2']);
 });
@@ -417,17 +427,19 @@ function browse(html: string, address: string) {
   const [script] = scripts(html);
   assert.ok(script, 'the page has a script');
   const element = (hidden: boolean, textContent = '') => ({ hidden, textContent });
-  const items = [...html.matchAll(/<li( hidden)?><a href="#[^"]+"><span class="name">(.*?)<\/span>/g)].map(([, hidden, name]) => {
-    const item = { ...element(Boolean(hidden)), name: element(false, text(name)) };
+  const items = [...html.matchAll(/<li( hidden)?><a href="#([^"]+)"><span class="name">(.*?)<\/span>/g)].map(([, hidden, anchor, name]) => {
+    const item = { ...element(Boolean(hidden)), anchor, name: element(false, text(name)) };
     return { ...item, querySelector: (selector: string) => (assert.equal(selector, '.name'), item.name) };
   });
   const sections = [...html.matchAll(/<section class="detail" id="([^"]+)"( hidden)?>/g)].map(([, id, hidden]) => ({ id, ...element(Boolean(hidden)) }));
   const line = noMatch(html)!;
   const none = element(line.hidden, line.text);
-  const listeners: (() => void)[] = [];
+  const listeners: Record<string, ((event: { preventDefault(): void }) => void)[]> = { input: [], submit: [] };
+  const on = (type: string, listener: (event: { preventDefault(): void }) => void) => listeners[type].push(listener);
   const field = {
     value: text(/<input type="search" name="filter" value="([^"]*)"/.exec(html)![1]),
-    addEventListener: (type: string, listener: () => void) => (assert.equal(type, 'input'), listeners.push(listener)),
+    addEventListener: (type: string, listener: () => void) => (assert.equal(type, 'input'), on(type, listener)),
+    form: { addEventListener: (type: string, listener: () => void) => (assert.equal(type, 'submit'), on(type, listener)) },
   };
   const location = { href: address };
   const document = {
@@ -439,8 +451,15 @@ function browse(html: string, address: string) {
   return {
     type(value: string) {
       field.value = value;
-      for (const listener of listeners) listener();
+      for (const listener of listeners.input) listener({ preventDefault() {} });
     },
+    /** Enter in the field: whether the form is still submitted, a new request. */
+    enter() {
+      let submitted = true;
+      for (const listener of listeners.submit) listener({ preventDefault: () => (submitted = false) });
+      return submitted;
+    },
+    anchors: () => items.filter((item) => !item.hidden).map((item) => item.anchor),
     shown: () => items.filter((item) => !item.hidden).map((item) => item.name.textContent),
     sections: () => sections.filter((section) => !section.hidden).map((section) => section.id),
     none: () => ({ hidden: none.hidden, text: none.textContent }),
@@ -464,6 +483,9 @@ test('filter on the fly: as the word is typed, only the skills whose names conta
   page.type('  ');
   assert.equal(page.shown().length, 4);
   assert.equal(page.address(), address);
+  // Enter submits nothing: the list is already filtered.
+  page.type('co');
+  assert.equal(page.enter(), false);
   assert.deepEqual(requests, []);
 });
 
@@ -503,6 +525,11 @@ test('filter on the fly: the same skills as the filter in the request', async ()
     assert.deepEqual(page.shown(), list(served.html).map((item) => item.name), word);
     assert.deepEqual(page.sections(), [...details(served.html).keys()], word);
   }
+  // `.` drops `a-b`, the first of two names with the same anchor: `a.b` keeps its whole-list anchor.
+  const anchor = browse((await view('https://github.com/JetBrains/same-anchor')).html, base);
+  anchor.type('.');
+  assert.deepEqual(anchor.anchors(), ['skill-a-b-2']);
+  assert.deepEqual(anchor.sections(), ['skill-a-b-2']);
   const same = browse((await view('https://github.com/JetBrains/same-name')).html, base);
   same.type('VIEW');
   assert.deepEqual(same.sections(), ['skill-review', 'skill-review-2']);

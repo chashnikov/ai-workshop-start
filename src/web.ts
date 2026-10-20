@@ -11,9 +11,9 @@ export type WebOptions = {
 };
 
 /**
- * `GET /` is the form; `GET /?repo=<URL>` is the form and the repository's skills, `&filter=<words>`
- * only those whose names contain every word, then as the field changes. Only for this
- * machine's own addresses: a page elsewhere must not read it through DNS rebinding.
+ * `GET /` is the form; `GET /?repo=<URL>` is the form and the repository's skills; `&filter=<words>`
+ * only the skills whose names contain every word (the page's script then filters as the words are typed).
+ * Only for this machine's own addresses: a page elsewhere must not read it through DNS rebinding.
  */
 export function createWebServer({ open }: WebOptions): Server {
   return createServer(async (request, response) => {
@@ -108,7 +108,8 @@ ${all.map(({ skill, anchor, shown }) => detail(repository, skill, anchor, shown)
 
 /**
  * Filters as the field changes, the way the server does: the skills whose names contain every word,
- * ignoring case; the address keeps the word, a link to share. Static: no repository content in it.
+ * ignoring case; the address keeps the words, a link to share. Enter submits nothing: the list is
+ * already filtered, no new request, no new scan. Static: no repository content in it.
  */
 const FILTER = `
 const field = document.querySelector('.filter input[type=search]');
@@ -132,6 +133,7 @@ field.addEventListener('input', () => {
   else url.searchParams.delete('filter');
   history.replaceState(null, '', url);
 });
+field.form.addEventListener('submit', (event) => event.preventDefault());
 `;
 
 /**
