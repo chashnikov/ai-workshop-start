@@ -80,32 +80,42 @@ const ACME: Recording = {
   ...tree('Acme/agents', ['agent/skills/deploy/SKILL.md'], COMMIT),
   ...tree('Acme/forked', ['.claude/skills/upstream/SKILL.md']),
   ...repository('Acme/tools', TOOLS),
-  // With a token: one code search over the organization, forks too, which finds other files named SKILL.md too.
-  [`${API}/search/code?q=filename:SKILL.md+org:Acme+fork:true&per_page=100&page=1`]: {
+  // With a token: a code search over the organization, which finds other files named SKILL.md too...
+  [`${API}/search/code?q=filename:SKILL.md+org:Acme&per_page=100&page=1`]: {
     status: 200,
     body: {
-      total_count: 7,
+      total_count: 6,
       items: [
         ...['.claude/skills/review/SKILL.md', '.agents/skills/review/SKILL.md', '.github/skills/testing/SKILL.md', 'docs/skills/not-a-skill/SKILL.md'].map(
           (path) => ({ path, repository: { full_name: 'Acme/tools' } }),
         ),
         { path: 'agent/skills/deploy/SKILL.md', repository: { full_name: 'Acme/agents' } },
         { path: 'skills/SKILL.md', repository: { full_name: 'Acme/docs' } },
-        { path: '.claude/skills/upstream/SKILL.md', repository: { full_name: 'Acme/forked' } },
       ],
     },
   },
+  // ...which leaves out forks, and one over its forks: `fork:true` finds only them.
+  [`${API}/search/code?q=filename:SKILL.md+org:Acme+fork:true&per_page=100&page=1`]: {
+    status: 200,
+    body: { total_count: 1, items: [{ path: '.claude/skills/upstream/SKILL.md', repository: { full_name: 'Acme/forked' } }] },
+  },
 };
+
+/** No forks with SKILL.md files, for a search qualifier. */
+function noForks(qualifier: string): Recording {
+  return { [`${API}/search/code?q=filename:SKILL.md+${qualifier}+fork:true&per_page=100&page=1`]: { status: 200, body: { total_count: 0, items: [] } } };
+}
 
 /** octo, a user: the user's own repositories, and `user:` in the code search. */
 const OCTO: Recording = {
   ...owner('octo', 'User'),
   ...list(`${API}/users/octo/repos?type=owner`, [{ id: 'octo/dotfiles' }]),
   ...tree('octo/dotfiles', ['.claude/skills/shell/SKILL.md']),
-  [`${API}/search/code?q=filename:SKILL.md+user:octo+fork:true&per_page=100&page=1`]: {
+  [`${API}/search/code?q=filename:SKILL.md+user:octo&per_page=100&page=1`]: {
     status: 200,
     body: { total_count: 1, items: [{ path: '.claude/skills/shell/SKILL.md', repository: { full_name: 'octo/dotfiles' } }] },
   },
+  ...noForks('user:octo'),
 };
 
 /** Plain, an organization whose repositories have no skills. */
@@ -169,22 +179,27 @@ test('scan <organization URL>: a repository that cannot be listed is a warning, 
   );
 });
 
-test('scan <organization URL> with GITHUB_TOKEN: one code search over the organization, forks too, the same repositories', async () => {
+test('scan <organization URL> with GITHUB_TOKEN: a code search over the organization, one over its forks, the same repositories', async () => {
   const requests: string[] = [];
   const result = await atlas(['scan', 'https://github.com/Acme'], (url, init) => (requests.push(url), github(url, init)), 'test');
   assert.equal(result.code, 0, result.stderr);
   assert.equal(result.stdout, ACME_OUTPUT);
   assert.equal(result.stderr, '');
-  assert.deepEqual(requests, [`${API}/users/Acme`, `${API}/search/code?q=filename:SKILL.md+org:Acme+fork:true&per_page=100&page=1`]);
+  assert.deepEqual(requests, [
+    `${API}/users/Acme`,
+    `${API}/search/code?q=filename:SKILL.md+org:Acme&per_page=100&page=1`,
+    `${API}/search/code?q=filename:SKILL.md+org:Acme+fork:true&per_page=100&page=1`,
+  ]);
 });
 
 test('GITHUB_TOKEN: a code search that timed out → what it found, and a warning', async () => {
   const timedOut = replay({
     ...owner('Slow', 'Organization'),
-    [`${API}/search/code?q=filename:SKILL.md+org:Slow+fork:true&per_page=100&page=1`]: {
+    [`${API}/search/code?q=filename:SKILL.md+org:Slow&per_page=100&page=1`]: {
       status: 200,
       body: { total_count: 1, incomplete_results: true, items: [{ path: '.claude/skills/a/SKILL.md', repository: { full_name: 'Slow/a' } }] },
     },
+    ...noForks('org:Slow'),
   });
   const result = await atlas(['scan', 'https://github.com/Slow'], timedOut, 'test');
   assert.equal(result.code, 0, result.stderr);
@@ -232,8 +247,9 @@ test('GITHUB_TOKEN: at most 1000 SKILL.md files from the code search, a warning 
   const recording: Recording = owner('Huge', 'Organization');
   for (let page = 1; page <= 10; page++) {
     const items = Array.from({ length: 100 }, (_, n) => ({ path: `.claude/skills/s${(page - 1) * 100 + n}/SKILL.md`, repository: { full_name: 'Huge/skills' } }));
-    recording[`${API}/search/code?q=filename:SKILL.md+org:Huge+fork:true&per_page=100&page=${page}`] = { status: 200, body: { total_count: 1500, items } };
+    recording[`${API}/search/code?q=filename:SKILL.md+org:Huge&per_page=100&page=${page}`] = { status: 200, body: { total_count: 1500, items } };
   }
+  Object.assign(recording, noForks('org:Huge'));
   const result = await atlas(['scan', 'https://github.com/Huge'], replay(recording), 'test');
   assert.equal(result.code, 0, result.stderr);
   assert.match(result.stdout, /^Huge\/skills · 1000 skills$/m);

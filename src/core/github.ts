@@ -117,11 +117,15 @@ export async function scanOrganization(input: string, options: GitHubOptions): P
   return { organization: { id: owner.login, url: `https://github.com/${owner.login}` }, repositories, warnings };
 }
 
-/** Code search over the whole organization, forks too: the files that may be skills, by repository. */
+/**
+ * Code search over the whole organization, forks too: the files that may be skills, by repository.
+ * Code search leaves out forks, which the trees include, and `fork:true` finds only forks (as GitHub
+ * answers): one search for each.
+ */
 async function searchOrganization(github: Client, qualifier: string, warnings: string[]): Promise<Map<string, string[]>> {
   const paths = new Map<string, string[]>();
-  // Without `fork:true`, code search leaves out forks, which the trees include.
-  for (const { path, repository } of await search(github, `${qualifier}+fork:true`, warnings)) {
+  const found = [...(await search(github, qualifier, warnings)), ...(await search(github, `${qualifier}+fork:true`, warnings))];
+  for (const { path, repository } of found) {
     paths.set(repository.full_name, [...(paths.get(repository.full_name) ?? []), path]);
   }
   return paths;

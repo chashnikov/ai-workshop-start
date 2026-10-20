@@ -23,8 +23,9 @@ A **GitHub organization** URL: `https://github.com/<organization>`, or `https://
 a user's `https://github.com/<user>` too
 - Every repository of the organization is scanned; only those that **have skills** are shown, sorted by **id**,
   each with the number of its skills, as defined above
-- With `GITHUB_TOKEN`: one code search over the whole organization, *forks too* (at most 1000 `SKILL.md` files:
-  a *warning* for the rest; a timed-out search: a *warning*); without it: each repository's tree at its default
+- With `GITHUB_TOKEN`: a code search over the whole organization, and one over its **forks**, which code search
+  leaves out otherwise (`fork:true` finds only forks); at most 1000 `SKILL.md` files each: a *warning* for the rest;
+  a timed-out search: a *warning*; without it: each repository's tree at its default
   branch, a few at a time, a branch name with `/` resolved to its commit first
 - A repository that cannot be listed, an empty one say → a *warning*, the scan goes on;
   the rate limit → the clear message, the scan stops: no more repositories are asked for
