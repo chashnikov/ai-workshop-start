@@ -15,6 +15,15 @@ build-tools-bump-gradle-api — Bumps the Gradle API version that Kotlin Gradle 
 
 `./skill-atlas serve` opens the same in a browser, at http://127.0.0.1:3000/, with each skill's content.
 
+`npm run demo` records a video of its filter, in a headless browser: on a remote machine too, with no
+display ([spec/demo.md](spec/demo.md)).
+
+```console
+$ npx playwright install --only-shell chromium   # once; add --with-deps, as root, for the system libraries
+$ npm run demo
+Recorded: …/recordings/filter.webm
+```
+
 Set `GITHUB_TOKEN` for a higher GitHub rate limit. `npm test` runs the tests.
 
 - [spec/](spec/): what it does. [AGENTS.md](AGENTS.md): the definition of done.

@@ -5,7 +5,7 @@ import { openGitHub, parseGitHubUrl } from '../src/core/github.ts';
 import { replay, type Recording } from '../src/core/replay.ts';
 import { openDirectory } from '../src/local.ts';
 
-export const FIXTURE = fileURLToPath(new URL('../fixture', import.meta.url));
+export { COMMIT, FIXTURE, fixtureOnGitHub, onGitHub } from '../src/core/fixture.ts';
 export const CLI = fileURLToPath(new URL('../src/cli.ts', import.meta.url));
 
 /** The commit GitHub answers for JetBrains/example. */
