@@ -210,6 +210,24 @@ test('an organization with more than 100 repositories: every page of them', asyn
   assert.equal(result.stdout, ['Many · 1 repository with skills', 'Many/r149 · 1 skill', '  https://github.com/Many/r149'].join('\n'));
 });
 
+test('a repository whose tree is too large: only its skill roots, its root tree asked for once, and a warning', async () => {
+  const entries = (items: { path: string; type: string; sha: string }[]) => ({ status: 200, body: { truncated: false, tree: items.map((item) => ({ mode: '100644', ...item })) } });
+  const recording = replay({
+    ...owner('Big', 'Organization'),
+    ...list(`${API}/orgs/Big/repos?type=all`, [{ id: 'Big/mono' }]),
+    [`${API}/repos/Big/mono/git/trees/main?recursive=1`]: { status: 200, body: { truncated: true, tree: [] } },
+    [`${API}/repos/Big/mono/git/trees/main`]: entries([{ path: '.claude', type: 'tree', sha: 'claude' }]),
+    [`${API}/repos/Big/mono/git/trees/claude`]: entries([{ path: 'skills', type: 'tree', sha: 'skills' }]),
+    [`${API}/repos/Big/mono/git/trees/skills?recursive=1`]: entries([{ path: 'build/SKILL.md', type: 'blob', sha: COMMIT }]),
+  });
+  const requests: string[] = [];
+  const result = await atlas(['scan', 'https://github.com/Big'], (url, init) => (requests.push(url), recording(url, init)));
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(result.stdout, ['Big · 1 repository with skills', 'Big/mono · 1 skill', '  https://github.com/Big/mono'].join('\n'));
+  assert.match(result.stderr, /^warning: Big\/mono: the tree is too large to list at once; looked only in \.agents\/skills, /);
+  assert.equal(requests.filter((url) => url === `${API}/repos/Big/mono/git/trees/main`).length, 1);
+});
+
 test('GITHUB_TOKEN: at most 1000 SKILL.md files from the code search, a warning for the rest', async () => {
   const recording: Recording = owner('Huge', 'Organization');
   for (let page = 1; page <= 10; page++) {
