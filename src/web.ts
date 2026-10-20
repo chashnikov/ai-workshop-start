@@ -12,7 +12,7 @@ export type WebOptions = {
 
 /**
  * `GET /` is the form; `GET /?repo=<URL>` is the form and the repository's skills, `&filter=<word>`
- * only those whose names contain it. Only for this
+ * only those whose names contain it, then as the field changes. Only for this
  * machine's own addresses: a page elsewhere must not read it through DNS rebinding.
  */
 export function createWebServer({ open }: WebOptions): Server {
@@ -71,10 +71,10 @@ function page(input: string, content = ''): string {
 
 /**
  * `<owner>/<repo> · N skills`, the warnings, then master-detail: the filter and the skills on the
- * left, the selected one on the right. Every skill that passes the filter is on the page, so
- * selecting one is `#<anchor>` and CSS `:target`, with the first one selected by default: no
- * request, no script. Filtering is a new request: the anchors are the unfiltered ones, so a link
- * selects the same skill with or without a filter.
+ * left, the selected one on the right. Every skill is on the page, those that do not pass the filter
+ * `hidden`, so selecting one is `#<anchor>` and CSS `:target`, with the first one shown selected by
+ * default: no request. The filter is the request's, then FILTER's as the field changes: the anchors
+ * are the unfiltered ones, so a link selects the same skill with or without a filter.
  */
 function result({ repository, skills, warnings }: ScanResult, input: string, filter: string): string {
   const count = `${skills.length} ${skills.length === 1 ? 'skill' : 'skills'}`;
@@ -84,31 +84,53 @@ function result({ repository, skills, warnings }: ScanResult, input: string, fil
 ${warnings.length ? `<ul class="warnings">${warnings.map((warning) => `<li>warning: ${escape(warning)}</li>`).join('')}</ul>` : ''}`;
   if (!skills.length) return `${heading}\n<p class="empty">No skills found.</p>`;
   const word = filter.toLowerCase();
-  const shown = skills.map((skill, index) => ({ skill, anchor: anchors[index] })).filter(({ skill }) => skill.name.toLowerCase().includes(word));
-  const form = filterForm(input, filter);
-  if (!shown.length) {
-    return `${heading}
-<div class="skills">
-<nav class="list">${form}</nav>
-<p class="empty">No skills match &#8220;${escape(filter)}&#8221;.</p>
-</div>`;
-  }
+  const all = skills.map((skill, index) => ({ skill, anchor: anchors[index], shown: skill.name.toLowerCase().includes(word) }));
+  const none = all.every(({ shown }) => !shown);
   // The selected skill's item in the list: anchors are [\w-] only, safe in CSS as they are.
-  const selected = shown.map(({ anchor }) => `body:has(#${anchor}:target) .list a[href="#${anchor}"]`).join(',\n');
+  const selected = all.map(({ anchor }) => `body:has(#${anchor}:target:not([hidden])) .list a[href="#${anchor}"]`).join(',\n');
   return `${heading}
 <style>
 ${selected},
-.skills:not(:has(.detail:target)) .list li:first-child a { background: #ddf4ff; border-color: #54aeff; }
+.skills:not(:has(.detail:target:not([hidden]))) .list li:nth-child(1 of :not([hidden])) a { background: #ddf4ff; border-color: #54aeff; }
 </style>
 <div class="skills">
-<nav class="list">${form}<ul>
-${shown.map(({ skill, anchor }) => listItem(skill, anchor)).join('\n')}
-</ul></nav>
+<nav class="list">${filterForm(input, filter)}<ul>
+${all.map(({ skill, anchor, shown }) => listItem(skill, anchor, shown)).join('\n')}
+</ul>
+<p class="empty no-match"${none ? '' : ' hidden'}>No skills match &#8220;${escape(filter)}&#8221;.</p>
+</nav>
 <div class="details">
-${shown.map(({ skill, anchor }) => detail(repository, skill, anchor)).join('\n')}
+${all.map(({ skill, anchor, shown }) => detail(repository, skill, anchor, shown)).join('\n')}
 </div>
-</div>`;
+</div>
+<script>${FILTER}</script>`;
 }
+
+/**
+ * Filters as the field changes, the way the server does: the skills whose names contain the word,
+ * ignoring case; the address keeps the word, a link to share. Static: no repository content in it.
+ */
+const FILTER = `
+const field = document.querySelector('.filter input[type=search]');
+const items = [...document.querySelectorAll('.list li')];
+const details = [...document.querySelectorAll('.details .detail')];
+const none = document.querySelector('.no-match');
+field.addEventListener('input', () => {
+  const word = field.value.trim();
+  let shown = 0;
+  items.forEach((item, index) => {
+    const match = item.querySelector('.name').textContent.toLowerCase().includes(word.toLowerCase());
+    item.hidden = details[index].hidden = !match;
+    if (match) shown++;
+  });
+  none.hidden = shown > 0;
+  none.textContent = \`No skills match \u201c\${word}\u201d.\`;
+  const url = new URL(location.href);
+  if (word) url.searchParams.set('filter', word);
+  else url.searchParams.delete('filter');
+  history.replaceState(null, '', url);
+});
+`;
 
 /** Above the list: only the skills whose names contain the word, for the same repository. */
 function filterForm(input: string, filter: string): string {
@@ -119,14 +141,14 @@ function filterForm(input: string, filter: string): string {
 </form>`;
 }
 
-function listItem(skill: Skill, anchor: string): string {
+function listItem(skill: Skill, anchor: string, shown: boolean): string {
   const summary = skill.description ? `<span class="summary">${escape(firstSentence(skill.description))}</span>` : '';
-  return `<li><a href="#${anchor}"><span class="name">${escape(skill.name)}</span>${summary}</a></li>`;
+  return `<li${shown ? '' : ' hidden'}><a href="#${anchor}"><span class="name">${escape(skill.name)}</span>${summary}</a></li>`;
 }
 
-function detail(repository: Repository, skill: Skill, anchor: string): string {
+function detail(repository: Repository, skill: Skill, anchor: string, shown: boolean): string {
   const link = skillLink(repository, skill);
-  return `<section class="detail" id="${anchor}">
+  return `<section class="detail" id="${anchor}"${shown ? '' : ' hidden'}>
 <h3>${escape(skill.name)}</h3>
 ${skill.description ? `<p class="description">${escape(skill.description)}</p>` : ''}
 <p class="link"><a href="${escape(link)}">${escape(skill.path)}</a></p>
@@ -178,7 +200,7 @@ a { color: #0969da; }
 .list .name { display: block; font-weight: 600; }
 .list .summary { display: block; font-size: .8125rem; color: #59636e; }
 .detail { display: none; border: 1px solid #d0d7de; border-radius: 6px; padding: 0 1rem 1rem; min-width: 0; }
-.detail:target, .details:not(:has(.detail:target)) .detail:first-child { display: block; }
+.detail:target:not([hidden]), .details:not(:has(.detail:target:not([hidden]))) .detail:nth-child(1 of :not([hidden])) { display: block; }
 /* Selecting a skill scrolls to it; a margin taller than the screen keeps the page at the top, the repository in view. */
 .detail { scroll-margin-top: 100vh; }
 .detail h3 { font-size: 1.5rem; }

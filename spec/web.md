@@ -11,13 +11,17 @@ A **GitHub repository** URL, in the page's form: `GET /?repo=<URL>`
 - **Master-detail**: the skills in a *left column*, sorted by **name**: name and the description's *first sentence*;
   the *selected* skill on the right: name, the *whole* description, the link pinned to the commit,
   `also in <paths>` for copies, and its **content**: the SKILL.md after the front matter
-- The *first* skill is selected by default; selecting another is `#skill-<name>`: *no new scan*, no script, a link to share
+- The *first* skill is selected by default; selecting another is `#skill-<name>`: *no new scan*, no script (CSS), a link to share
 - In `<name>`, anything but letters, digits, `_` and `-` is `-`; the same anchor again gets `-2`, `-3`…
 - Selecting a skill keeps the page at the top: the repository stays *in view*
 - No skills → `No skills found.`
 - **Filter**: a text field *above the list*; `&filter=<word>` shows only the skills whose **name** contains the word,
-  ignoring case; empty → every skill. A new request, as the form: *no script*, a link to share
-  - The anchors stay those of the whole list; the *first matching* skill is selected by default
+  ignoring case; empty → every skill
+  - **On the fly**: as the word is typed, the list and the skills follow, *no new request*, *no new scan*;
+    the address keeps the word, a link to share. The page's *only* script; without it, the field submits
+    the word, a new request
+  - The anchors stay those of the whole list; the *first matching* skill is selected by default,
+    a link to a skill that does not match too
   - No skill matches → `No skills match “<word>”.`, the field still there
 - Narrow screens: the list above the skill; selecting one scrolls to it
 - Warnings on the page; the scan goes on
