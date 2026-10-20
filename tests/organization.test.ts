@@ -137,9 +137,20 @@ const LIMITED: Recording = {
   ...tree('Limited/b', ['.claude/skills/b/SKILL.md']),
 };
 
+/** Half: the skills of Half/gone cannot be read as it is listed (its branch is gone); a scan of it finds them. */
+const HALF: Recording = {
+  ...owner('Half', 'Organization'),
+  ...list(`${API}/orgs/Half/repos?type=all`, [{ id: 'Half/gone' }, { id: 'Half/here' }]),
+  ...tree('Half/gone', ['.claude/skills/a/SKILL.md']),
+  ...tree('Half/here', ['.claude/skills/b/SKILL.md']),
+  [`${API}/repos/Half/gone/commits/main`]: { status: 409, body: { message: 'Git Repository is empty.' } },
+  ...repository('Half/gone', { '.claude/skills/a/SKILL.md': skill('a') }, 'trunk'),
+  ...repository('Half/here', { '.claude/skills/b/SKILL.md': skill('b') }),
+};
+
 const NOBODY: Recording = { [`${API}/users/Nobody`]: { status: 404, body: { message: 'Not Found' } } };
 
-const github = replay({ ...ACME, ...OCTO, ...PLAIN, ...LIMITED, ...NOBODY });
+const github = replay({ ...ACME, ...OCTO, ...PLAIN, ...LIMITED, ...HALF, ...NOBODY });
 
 /** `skill-atlas <args>`, as the CLI runs it, with GitHub answering from the recordings above. */
 async function atlas(args: string[], fetch = github, token?: string) {
@@ -349,15 +360,7 @@ test('reading the skills as the organization is scanned: each repository as a sc
 });
 
 test('reading the skills: a repository that cannot be read is a warning, still listed, and the scan goes on', async () => {
-  const unread = replay({
-    ...owner('Half', 'Organization'),
-    ...list(`${API}/orgs/Half/repos?type=all`, [{ id: 'Half/gone' }, { id: 'Half/here' }]),
-    ...tree('Half/gone', ['.claude/skills/a/SKILL.md']),
-    ...tree('Half/here', ['.claude/skills/b/SKILL.md']),
-    [`${API}/repos/Half/gone`]: { status: 404, body: { message: 'Not Found' } },
-    ...repository('Half/here', { '.claude/skills/b/SKILL.md': skill('b') }),
-  });
-  const result = await scanOrganization('https://github.com/Half', { fetch: unread, read: true });
+  const result = await scanOrganization('https://github.com/Half', { fetch: github, read: true });
   assert.deepEqual(
     result.repositories.map(({ id, skills, result }) => ({ id, skills, read: Boolean(result) })),
     [
@@ -365,7 +368,49 @@ test('reading the skills: a repository that cannot be read is a warning, still l
       { id: 'Half/here', skills: 1, read: true },
     ],
   );
-  assert.deepEqual(result.warnings, ['Half/gone: its skills cannot be read: Repository not found: https://github.com/Half/gone']);
+  assert.deepEqual(result.warnings, [`Half/gone: its skills cannot be read: GitHub answered 409 for ${API}/repos/Half/gone/commits/main: Git Repository is empty.`]);
+});
+
+test('reading the skills: the rate limit stops the reading, not the scan; the listing is kept, with a warning', async () => {
+  // GitHub stops answering once the repositories are listed, as the reading starts.
+  let reading = false;
+  const limited: Fetch = async (url, init) =>
+    reading ? new Response(JSON.stringify({ message: 'API rate limit exceeded for 192.0.2.1.' }), { status: 403 }) : github(url, init);
+  const progress = (message: string) => (reading ||= message.startsWith('Read the skills'));
+  const result = await scanOrganization('https://github.com/Acme', { fetch: limited, read: true, progress });
+  assert.deepEqual(
+    result.repositories.map(({ id, skills, result }) => ({ id, skills, read: Boolean(result) })),
+    [
+      { id: 'Acme/agents', skills: 1, read: false },
+      { id: 'Acme/forked', skills: 1, read: false },
+      { id: 'Acme/tools', skills: 2, read: false },
+    ],
+  );
+  assert.equal(result.warnings.at(-1), 'the skills of 3 repositories were not read: GitHub rate limit reached; set GITHUB_TOKEN');
+});
+
+test('reading the skills: a repository whose tree is too large keeps its warning, as a scan of it does', async () => {
+  const entries = (items: { path: string; type: string; sha: string }[]) => ({ status: 200, body: { truncated: false, tree: items.map((item) => ({ mode: '100644', ...item })) } });
+  const recording: Recording = {
+    ...owner('Large', 'Organization'),
+    ...list(`${API}/orgs/Large/repos?type=all`, [{ id: 'Large/mono' }]),
+    ...repository('Large/mono', { '.claude/skills/build/SKILL.md': skill('build') }),
+    [`${API}/repos/Large/mono/git/trees/claude`]: entries([{ path: 'skills', type: 'tree', sha: 'skills' }]),
+    [`${API}/repos/Large/mono/git/trees/skills?recursive=1`]: entries([{ path: 'build/SKILL.md', type: 'blob', sha: COMMIT }]),
+  };
+  // Too large, by branch for the organization's listing, and at the commit for a scan of it.
+  for (const ref of ['main', COMMIT]) {
+    recording[`${API}/repos/Large/mono/git/trees/${ref}?recursive=1`] = { status: 200, body: { truncated: true, tree: [] } };
+    recording[`${API}/repos/Large/mono/git/trees/${ref}`] = entries([{ path: '.claude', type: 'tree', sha: 'claude' }]);
+  }
+  const large = replay(recording);
+  const requests: string[] = [];
+  const result = await scanOrganization('https://github.com/Large', { fetch: (url, init) => (requests.push(url), large(url, init)), read: true });
+  const mono = result.repositories[0].result!;
+  assert.deepEqual(mono, await scan(await openGitHub('https://github.com/Large/mono', { fetch: large })));
+  assert.match(mono.warnings[0], /^the tree is too large to list at once; looked only in /);
+  // Without a token, the list said the branch: the repository is not asked for again.
+  assert.ok(!requests.includes(`${API}/repos/Large/mono`));
 });
 
 // The web view.
@@ -502,6 +547,20 @@ test('web: choosing a repository of an organization just scanned → its skills 
   // A repository the organization has no skills in, or another organization: scanned as before.
   await get(`org=${encodeURIComponent('https://github.com/Acme')}&repo=${encodeURIComponent('https://github.com/Acme/docs')}`);
   assert.ok(requests.includes(`${API}/repos/Acme/docs`));
+  // Only the repository: the organization is kept, it is not listed again.
+  assert.ok(!requests.includes(`${API}/users/Acme`));
+});
+
+test('web: choosing a repository whose skills could not be read → it is scanned, the organization not listed again', async () => {
+  const page = await get(`repo=${encodeURIComponent('https://github.com/Half')}`);
+  assert.match(page.html, /<li>warning: Half\/gone: its skills cannot be read: /);
+  requests.length = 0;
+  const chosen = await get(`org=${encodeURIComponent('https://github.com/Half')}&repo=${encodeURIComponent('https://github.com/Half/gone')}`);
+  assert.equal(chosen.status, 200);
+  assert.ok(requests.includes(`${API}/repos/Half/gone`));
+  assert.ok(!requests.includes(`${API}/users/Half`));
+  assert.equal(chooser(chosen.html)?.options.find((option) => option.selected)?.value, 'https://github.com/Half/gone');
+  assert.deepEqual([...chosen.html.matchAll(/<span class="name">([^<]*)<\/span>/g)].map(([, name]) => name), ['a']);
 });
 
 test('web: an organization is kept for 10 minutes, then scanned again; the organization page always scans', async () => {
@@ -550,6 +609,26 @@ test('web: at most the 10 organizations scanned last are kept', async () => {
   assert.equal(asked.length, 0, asked.join(" "));
   await (await fetch(`${at}?org=github.com%2FOrg0&repo=github.com%2FOrg0%2Fr`)).text();
   assert.ok(asked.includes(`${API}/users/Org0`));
+});
+
+test('web: the rate limit while the skills are read → the chooser all the same, with a warning', async () => {
+  let reading = false;
+  const limited = createWebServer({
+    open: (input) => openGitHub(input, { fetch: github }),
+    organization: (input, progress) =>
+      scanOrganization(input, {
+        fetch: async (url, init) => (reading ? new Response(JSON.stringify({ message: 'API rate limit exceeded' }), { status: 403 }) : github(url, init)),
+        read: true,
+        progress: (message) => ((reading ||= message.startsWith('Read the skills')), progress?.(message)),
+      }),
+  });
+  limited.listen(0, '127.0.0.1');
+  await once(limited, 'listening');
+  after(() => limited.close());
+  const html = await (await fetch(`http://127.0.0.1:${(limited.address() as AddressInfo).port}/?repo=github.com%2FAcme`)).text();
+  assert.equal(chooser(html)?.options.length, 4);
+  assert.match(html, /<li>warning: the skills of 3 repositories were not read: GitHub rate limit reached; set GITHUB_TOKEN<\/li>/);
+  assert.doesNotMatch(html, /<p class="error">/);
 });
 
 test('web: a failure once the progress is on the page → the message on the page, after it', async () => {

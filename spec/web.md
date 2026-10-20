@@ -40,9 +40,12 @@ A **GitHub organization** URL in the same form: `GET /?repo=<organization URL>`,
 - Scanning the organization reads every repository's skills too, as a scan of it does, and **keeps** them, in memory:
   choosing a repository then shows its skills **at once**, *no request* to GitHub, the filter too; as they were scanned
   - Kept *10 minutes*, the *10* organizations scanned last; the organization's page always scans again
-  - Not kept, or a repository it has no skills in → listed, kept again, and the repository scanned, as before;
-    without `GITHUB_TOKEN`, a request per repository of the organization; with it, two code searches or more (10 a minute)
-  - A repository whose skills cannot be read → a *warning*; chosen, it is scanned
+  - Not kept → listed, kept again, and the repository scanned, as before; without `GITHUB_TOKEN`, a request per
+    repository of the organization; with it, two code searches or more (10 a minute)
+  - Kept, but a repository without its skills read, or not in it → only the repository scanned, *no new listing*
+  - A repository whose skills cannot be read → a *warning*; chosen, it is scanned. The rate limit while they are read →
+    the reading stops, not the scan: the chooser all the same, a *warning* for those not read
+  - As a scan of the repository shows it: its own warnings, a tree too large say, too
 - The organization cannot be listed → the repository is still shown, a *warning* instead of the chooser;
   `org` not an organization URL → the clear message, status 400
 - No repository with skills → `No repositories with skills found.`, no chooser

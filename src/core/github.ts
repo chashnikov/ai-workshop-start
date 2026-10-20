@@ -125,47 +125,66 @@ export async function scanOrganization(input: string, options: OrganizationOptio
   );
   const organization = owner.type === 'Organization';
   const warnings: string[] = [];
-  let paths: Map<string, string[]>;
+  let listings: Map<string, Listing>;
   if (options.token) {
     progress(`Searching the repositories of ${owner.login} for SKILL.md files…`);
-    paths = await searchOrganization(github, `${organization ? 'org' : 'user'}:${owner.login}`, warnings);
+    listings = await searchOrganization(github, `${organization ? 'org' : 'user'}:${owner.login}`, warnings);
   } else {
     progress(`Listing the repositories of ${owner.login}…`);
     const list = organization ? `${API}/orgs/${owner.login}/repos?type=all` : `${API}/users/${owner.login}/repos?type=owner`;
-    paths = await organizationTrees(github, options, list, warnings, (done, total) => progress(`Listed ${done} of ${total} repositories of ${owner.login}…`));
+    listings = await organizationTrees(github, options, list, warnings, (done, total) => progress(`Listed ${done} of ${total} repositories of ${owner.login}…`));
   }
-  const repositories: OrganizationRepository[] = [...paths]
-    .map(([id, files]) => ({ id, url: `https://github.com/${id}`, skills: findSkills(files).length }))
+  const repositories: OrganizationRepository[] = [...listings]
+    .map(([id, listing]) => ({ id, url: `https://github.com/${id}`, skills: findSkills(listing.paths).length }))
     .filter((repository) => repository.skills > 0)
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-  if (options.read) await readOrganization(options, repositories, paths, warnings, (done, total) => progress(`Read the skills of ${done} of ${total} repositories…`));
+  if (options.read) await readOrganization(options, repositories, listings, warnings, (done, total) => progress(`Read the skills of ${done} of ${total} repositories…`));
   return { organization: { id: owner.login, url: `https://github.com/${owner.login}` }, repositories, warnings };
 }
 
-/** Each repository's skills, at its default branch's commit, from the files the listing found. */
+/**
+ * What listing found in a repository: the files that may be skills, what listing them had to leave
+ * out, and the default branch, when the list of repositories said it.
+ */
+type Listing = { paths: string[]; warnings: string[]; branch?: string };
+
+/**
+ * Each repository's skills, at its default branch's commit, from the files the listing found, as a
+ * scan of it finds them. The rate limit stops the reading, not the scan: the repositories not read
+ * are scanned when they are chosen.
+ */
 async function readOrganization(
   options: GitHubOptions,
   repositories: OrganizationRepository[],
-  paths: Map<string, string[]>,
+  listings: Map<string, Listing>,
   warnings: string[],
   progress: (done: number, total: number) => void,
 ): Promise<void> {
   const read: string[][] = repositories.map(() => []); // the warnings, in the listed order
+  let limited: RateLimitError | undefined;
   let done = 0;
   progress(done, repositories.length);
   await inParallel(repositories, async (repository, index) => {
+    if (limited) return;
+    const listing = listings.get(repository.id)!;
     const own = client(options); // its answers are dropped once the repository is read
     try {
-      const { id, sha } = await head(own, repository.id);
-      repository.result = await scan(source(own, id, sha, paths.get(repository.id) ?? [], []));
+      // The branch, when the list said it: one request less.
+      const { id, sha } = listing.branch
+        ? { id: repository.id, sha: (await own.json<{ sha: string }>(`${API}/repos/${repository.id}/commits/${encodePath(listing.branch)}`)).sha }
+        : await head(own, repository.id);
+      repository.result = await scan(source(own, id, sha, listing.paths, [...listing.warnings]));
       repository.skills = repository.result.skills.length;
     } catch (error) {
-      if (error instanceof RateLimitError || !(error instanceof AtlasError)) throw error;
+      if (error instanceof RateLimitError) return void (limited = error);
+      if (!(error instanceof AtlasError)) throw error;
       read[index].push(`${repository.id}: its skills cannot be read: ${error.message}`);
     }
     progress(++done, repositories.length);
   });
   warnings.push(...read.flat());
+  const unread = repositories.filter((repository, index) => !repository.result && !read[index].length).length;
+  if (limited) warnings.push(`the skills of ${unread} ${unread === 1 ? 'repository were' : 'repositories were'} not read: ${limited.message}`);
 }
 
 /** `each` for every item, PARALLEL at a time; once one has failed, no more are started. */
@@ -191,13 +210,14 @@ async function inParallel<T>(items: T[], each: (item: T, index: number) => Promi
  * Code search leaves out forks, which the trees include, and `fork:true` finds only forks (as GitHub
  * answers): one search for each.
  */
-async function searchOrganization(github: Client, qualifier: string, warnings: string[]): Promise<Map<string, string[]>> {
-  const paths = new Map<string, string[]>();
+async function searchOrganization(github: Client, qualifier: string, warnings: string[]): Promise<Map<string, Listing>> {
+  const listings = new Map<string, Listing>();
   const found = [...(await search(github, qualifier, warnings)), ...(await search(github, `${qualifier}+fork:true`, warnings, 'SKILL.md files in forks'))];
   for (const { path, repository } of found) {
-    paths.set(repository.full_name, [...(paths.get(repository.full_name) ?? []), path]);
+    const listing = listings.get(repository.full_name) ?? { paths: [], warnings: [] };
+    listings.set(repository.full_name, { ...listing, paths: [...listing.paths, path] });
   }
-  return paths;
+  return listings;
 }
 
 /** Each repository's tree at its default branch, a few at a time: the files that may be skills, by repository. */
@@ -207,7 +227,7 @@ async function organizationTrees(
   list: string,
   warnings: string[],
   progress: (done: number, total: number) => void,
-): Promise<Map<string, string[]>> {
+): Promise<Map<string, Listing>> {
   const repositories: { full_name: string; default_branch: string }[] = [];
   for (let page = 1; ; page++) {
     const result = await github.json<{ full_name: string; default_branch: string }[]>(`${list}&per_page=100&page=${page}`);
@@ -229,12 +249,13 @@ async function organizationTrees(
     }
     progress(++done, repositories.length);
   });
-  const paths = new Map<string, string[]>();
-  repositories.forEach(({ full_name: id }, index) => {
-    if (listed[index].paths) paths.set(id, listed[index].paths);
-    warnings.push(...listed[index].warnings.map((warning) => `${id}: ${warning}`));
+  const listings = new Map<string, Listing>();
+  repositories.forEach(({ full_name: id, default_branch: branch }, index) => {
+    const { paths, warnings: own } = listed[index];
+    if (paths) listings.set(id, { paths, warnings: own, branch });
+    warnings.push(...own.map((warning) => `${id}: ${warning}`));
   });
-  return paths;
+  return listings;
 }
 
 /**
