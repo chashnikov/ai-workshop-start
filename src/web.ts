@@ -10,16 +10,28 @@ export type WebOptions = {
   open(input: string): Promise<Source>;
 };
 
-/** `GET /` is the form; `GET /?repo=<URL>` is the form and the repository's skills. */
+/**
+ * `GET /` is the form; `GET /?repo=<URL>` is the form and the repository's skills. Only for this
+ * machine's own addresses: a page elsewhere must not read it through DNS rebinding.
+ */
 export function createWebServer({ open }: WebOptions): Server {
   return createServer(async (request, response) => {
-    const url = new URL(request.url ?? '/', 'http://localhost');
-    const send = (status: number, html: string) => {
-      response.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8' });
+    const send = (status: number, html: string, headers: Record<string, string> = {}) => {
+      response.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8', ...headers });
       response.end(html);
     };
-    if (request.method !== 'GET' && request.method !== 'HEAD') return send(405, page('', error('Only GET is supported')));
+    const port = request.socket.localPort;
+    if (request.headers.host !== `127.0.0.1:${port}` && request.headers.host !== `localhost:${port}`) {
+      return send(403, page('', error(`Not served for the host: ${request.headers.host ?? ''}`)));
+    }
+    if (request.method !== 'GET' && request.method !== 'HEAD') {
+      return send(405, page('', error('Only GET is supported')), { Allow: 'GET, HEAD' });
+    }
+    // The request's own path: with a base URL, `//skills` would be the host `skills`.
+    const url = new URL(`http://localhost${request.url ?? '/'}`);
     if (url.pathname !== '/') return send(404, page('', error(`Not found: ${url.pathname}`)));
+    // The headers only: no scan for an answer nobody reads.
+    if (request.method === 'HEAD') return send(200, '');
     const input = url.searchParams.get('repo')?.trim() ?? '';
     if (!input) return send(200, page(''));
     try {

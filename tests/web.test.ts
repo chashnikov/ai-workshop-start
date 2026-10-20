@@ -4,12 +4,13 @@ import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { readdirSync, readFileSync } from 'node:fs';
-import { createServer, type Server } from 'node:http';
+import { createServer, request, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { join, relative } from 'node:path';
 import { after, test } from 'node:test';
 import { openGitHub, type Fetch } from '../src/core/github.ts';
 import { replay, type Recording } from '../src/core/replay.ts';
+import { run } from '../src/commands.ts';
 import { createWebServer } from '../src/web.ts';
 import { CLI, EXAMPLE, EXAMPLE_COMMIT, FIXTURE } from './helpers.ts';
 
@@ -210,13 +211,71 @@ test('unreachable repository → the clear message on the page, status 400', asy
   assert.equal(text(page.html), 'Cannot reach GitHub: not recorded: https://api.github.com/repos/JetBrains/not-answered');
 });
 
-test('another path → 404; another method → 405', async () => {
+/** A request as written, path and `Host` included: `fetch` normalizes neither. */
+async function raw(method: string, path: string, host = new URL(base).host) {
+  const sent = request(new URL(base), { method, path, headers: { host } });
+  sent.end();
+  const [response] = (await once(sent, 'response')) as [import('node:http').IncomingMessage];
+  let html = '';
+  for await (const chunk of response) html += chunk;
+  return { status: response.statusCode, headers: response.headers, html };
+}
+
+test('another path → 404, //<path> too', async () => {
   const missing = await get('skills');
   assert.equal(missing.status, 404);
   assert.equal(text(missing.html), 'Not found: /skills');
-  const posted = await get('', { method: 'POST' });
+  const doubled = await raw('GET', '//skills');
+  assert.equal(doubled.status, 404);
+  assert.equal(text(doubled.html), 'Not found: //skills');
+});
+
+test('another host → 403: no DNS rebinding; 127.0.0.1 and localhost are served', async () => {
+  const rebound = await raw('GET', '/?repo=github.com/JetBrains/example', 'attacker.example');
+  assert.equal(rebound.status, 403);
+  assert.equal(text(rebound.html), 'Not served for the host: attacker.example');
+  const otherPort = await raw('GET', '/', '127.0.0.1:1');
+  assert.equal(otherPort.status, 403);
+  const port = new URL(base).port;
+  assert.equal((await raw('GET', '/', `127.0.0.1:${port}`)).status, 200);
+  assert.equal((await raw('GET', '/', `localhost:${port}`)).status, 200);
+});
+
+test('HEAD: the headers only, no scan; another method → 405 with Allow: GET, HEAD', async () => {
+  requests.length = 0;
+  const head = await raw('HEAD', `/?repo=${encodeURIComponent('https://github.com/JetBrains/example')}`);
+  assert.equal(head.status, 200);
+  assert.equal(head.headers['content-type'], 'text/html; charset=utf-8');
+  assert.equal(head.html, '');
+  assert.deepEqual(requests, []);
+  const posted = await raw('POST', '/');
   assert.equal(posted.status, 405);
+  assert.equal(posted.headers.allow, 'GET, HEAD');
   assert.equal(text(posted.html), 'Only GET is supported');
+});
+
+test('narrow screens: the list above the skill', async () => {
+  const page = await view('github.com/JetBrains/fixture');
+  assert.match(page.html, /@media \(max-width: 48rem\) \{ \.skills \{ grid-template-columns: 1fr; \}/);
+  // The list comes first in the page, so in one column it is above the skill.
+  assert.ok(page.html.indexOf('<nav class="list">') < page.html.indexOf('<div class="details">'));
+});
+
+test('skill-atlas serve: port 3000 by default', async () => {
+  const ports: number[] = [];
+  const printed: string[] = [];
+  const code = await run(['serve'], {
+    open: () => Promise.reject(new Error('not opened')),
+    print: (line) => printed.push(line),
+    error: (line) => printed.push(line),
+    serve: async (port) => {
+      ports.push(port);
+      return `http://127.0.0.1:${port}/`;
+    },
+  });
+  assert.equal(code, 0);
+  assert.deepEqual(ports, [3000]);
+  assert.deepEqual(printed, ['Skill Atlas web view: http://127.0.0.1:3000/']);
 });
 
 test('skill-atlas serve: prints the address and serves the page on 127.0.0.1', async (t) => {
@@ -230,10 +289,13 @@ test('skill-atlas serve: prints the address and serves the page on 127.0.0.1', a
   assert.match(await response.text(), /name="repo"/);
 });
 
-test('skill-atlas serve: a bad or taken port → a clear message, exit code 1', async (t) => {
+test('skill-atlas serve: a port that is not a number, over 65535 or taken → a clear message, exit code 1', async (t) => {
   const bad = spawnSync(process.execPath, [CLI, 'serve', '--port', 'x'], { encoding: 'utf8' });
   assert.equal(bad.status, 1);
   assert.equal(bad.stderr, 'Not a port: x\nUsage: skill-atlas serve [--port <port>]\n');
+  const over = spawnSync(process.execPath, [CLI, 'serve', '--port', '70000'], { encoding: 'utf8' });
+  assert.equal(over.status, 1);
+  assert.equal(over.stderr, 'Not a port: 70000\nUsage: skill-atlas serve [--port <port>]\n');
 
   const taken = createServer();
   t.after(() => taken.close());
