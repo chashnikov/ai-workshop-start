@@ -342,6 +342,8 @@ test('filter: a text field above the list, for the same repository; empty shows 
   const empty = await filtered('github.com/JetBrains/fixture', '  ');
   assert.equal(list(empty.html).length, 4);
   assert.deepEqual(filterForm(empty.html), { repo: 'github.com/JetBrains/fixture', filter: '' });
+  // No button: the field filters as it changes, else Enter submits it.
+  assert.doesNotMatch(/<form class="filter"[\s\S]*?<\/form>/.exec(page.html)?.[0] ?? '', /<button/);
 });
 
 test('filter: only the skills whose names contain the word, ignoring case, in both columns', async () => {
@@ -358,6 +360,15 @@ test('filter: only the skills whose names contain the word, ignoring case, in bo
   assert.match(page.html, /<li>warning: /);
   // Names only: "testing" says "pushing" in its description, not in its name.
   assert.deepEqual(list((await filtered('github.com/JetBrains/fixture', 'push')).html), []);
+});
+
+test('filter: several words → only the skills whose names contain every one, in any order', async () => {
+  const names = async (words: string) => list((await filtered('github.com/JetBrains/fixture', words)).html).map((item) => item.name);
+  assert.deepEqual(await names('co st'), ['code-style']);
+  assert.deepEqual(await names(' ST\tCO '), ['code-style']);
+  assert.deepEqual(await names('e  t'), ['code-style', 'release-checklist', 'testing']);
+  assert.deepEqual(await names('co xyz'), []);
+  assert.deepEqual(noMatch((await filtered('github.com/JetBrains/fixture', ' co  xyz ')).html), { hidden: false, text: 'No skills match “co xyz”.' });
 });
 
 test('filter: the anchors stay those of the whole list; the first match is selected by default, with no script', async () => {
@@ -469,8 +480,23 @@ test('filter on the fly: no match → "No skills match", the field still there; 
   assert.equal(page.none().hidden, true);
 });
 
+test('filter on the fly: several words → only the skills whose names contain every one', async () => {
+  const page = browse((await view('github.com/JetBrains/fixture')).html, `${base}?repo=github.com%2FJetBrains%2Ffixture`);
+  page.type('co');
+  assert.deepEqual(page.shown(), ['code-style', 'commits']);
+  page.type('co ');
+  assert.deepEqual(page.shown(), ['code-style', 'commits']);
+  page.type('co st');
+  assert.deepEqual(page.shown(), ['code-style']);
+  assert.deepEqual(page.sections(), ['skill-code-style']);
+  assert.equal(page.address(), `${base}?repo=github.com%2FJetBrains%2Ffixture&filter=co+st`);
+  page.type('co st x');
+  assert.deepEqual(page.shown(), []);
+  assert.deepEqual(page.none(), { hidden: false, text: 'No skills match “co st x”.' });
+});
+
 test('filter on the fly: the same skills as the filter in the request', async () => {
-  for (const word of ['', 'CO', 'm', 'review', 'push', 'zzz', 'Release-']) {
+  for (const word of ['', 'CO', 'm', 'review', 'push', 'zzz', 'Release-', 'co st', ' ST\tCO ', 'e  t', 'co xyz']) {
     const served = await filtered('github.com/JetBrains/fixture', word);
     const page = browse((await view('github.com/JetBrains/fixture')).html, base);
     page.type(word);

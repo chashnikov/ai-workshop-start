@@ -11,8 +11,8 @@ export type WebOptions = {
 };
 
 /**
- * `GET /` is the form; `GET /?repo=<URL>` is the form and the repository's skills, `&filter=<word>`
- * only those whose names contain it, then as the field changes. Only for this
+ * `GET /` is the form; `GET /?repo=<URL>` is the form and the repository's skills, `&filter=<words>`
+ * only those whose names contain every word, then as the field changes. Only for this
  * machine's own addresses: a page elsewhere must not read it through DNS rebinding.
  */
 export function createWebServer({ open }: WebOptions): Server {
@@ -83,8 +83,8 @@ function result({ repository, skills, warnings }: ScanResult, input: string, fil
   const heading = `<h2 class="repository"><a href="${escape(repository.url)}">${escape(repository.id)}</a> · ${count}${commit}</h2>
 ${warnings.length ? `<ul class="warnings">${warnings.map((warning) => `<li>warning: ${escape(warning)}</li>`).join('')}</ul>` : ''}`;
   if (!skills.length) return `${heading}\n<p class="empty">No skills found.</p>`;
-  const word = filter.toLowerCase();
-  const all = skills.map((skill, index) => ({ skill, anchor: anchors[index], shown: skill.name.toLowerCase().includes(word) }));
+  const words = filter.toLowerCase().split(/\s+/).filter(Boolean);
+  const all = skills.map((skill, index) => ({ skill, anchor: anchors[index], shown: words.every((word) => skill.name.toLowerCase().includes(word)) }));
   const none = all.every(({ shown }) => !shown);
   // The selected skill's item in the list: anchors are [\w-] only, safe in CSS as they are.
   const selected = all.map(({ anchor }) => `body:has(#${anchor}:target:not([hidden])) .list a[href="#${anchor}"]`).join(',\n');
@@ -107,7 +107,7 @@ ${all.map(({ skill, anchor, shown }) => detail(repository, skill, anchor, shown)
 }
 
 /**
- * Filters as the field changes, the way the server does: the skills whose names contain the word,
+ * Filters as the field changes, the way the server does: the skills whose names contain every word,
  * ignoring case; the address keeps the word, a link to share. Static: no repository content in it.
  */
 const FILTER = `
@@ -116,28 +116,32 @@ const items = [...document.querySelectorAll('.list li')];
 const details = [...document.querySelectorAll('.details .detail')];
 const none = document.querySelector('.no-match');
 field.addEventListener('input', () => {
-  const word = field.value.trim();
+  const filter = field.value.trim();
+  const words = filter.toLowerCase().split(/\\s+/).filter(Boolean);
   let shown = 0;
   items.forEach((item, index) => {
-    const match = item.querySelector('.name').textContent.toLowerCase().includes(word.toLowerCase());
+    const name = item.querySelector('.name').textContent.toLowerCase();
+    const match = words.every((word) => name.includes(word));
     item.hidden = details[index].hidden = !match;
     if (match) shown++;
   });
   none.hidden = shown > 0;
-  none.textContent = \`No skills match \u201c\${word}\u201d.\`;
+  none.textContent = \`No skills match \u201c\${filter}\u201d.\`;
   const url = new URL(location.href);
-  if (word) url.searchParams.set('filter', word);
+  if (filter) url.searchParams.set('filter', filter);
   else url.searchParams.delete('filter');
   history.replaceState(null, '', url);
 });
 `;
 
-/** Above the list: only the skills whose names contain the word, for the same repository. */
+/**
+ * Above the list: only the skills whose names contain every word, for the same repository. No button:
+ * the script filters as the field changes; without it, Enter submits the field.
+ */
 function filterForm(input: string, filter: string): string {
   return `<form class="filter" method="get" action="/">
 <input type="hidden" name="repo" value="${escape(input)}">
 <input type="search" name="filter" value="${escape(filter)}" placeholder="Filter by name" aria-label="Filter skills by name">
-<button type="submit">Filter</button>
 </form>`;
 }
 
@@ -187,7 +191,7 @@ header { display: flex; flex-wrap: wrap; align-items: center; gap: 1rem; padding
 header h1 { font-size: 1.25rem; margin: 0; }
 header h1 a { color: inherit; text-decoration: none; }
 header form { display: flex; flex: 1; gap: .5rem; min-width: 20rem; }
-.filter { display: flex; gap: .5rem; margin-bottom: .75rem; }
+.filter { display: flex; margin-bottom: .75rem; }
 .filter input { min-width: 0; }
 input { flex: 1; font: inherit; padding: .4rem .6rem; border: 1px solid #d0d7de; border-radius: 6px; }
 button { font: inherit; padding: .4rem .9rem; border: 1px solid #1f883d; border-radius: 6px; background: #1f883d; color: #fff; cursor: pointer; }
