@@ -14,8 +14,8 @@
 screenshot, kept in Git: `e2e/screenshots/<step>.png`, the whole page, without the caption
 - The steps: `organization`, `repository`, `filter`, `selected`, `words`, `no-match`, `empty`
 - Rendered by Playwright's headless Chromium on Linux, as in CI; a page changed on purpose →
-  `npm run test:screenshots -- --update-snapshots`, and the new screenshots committed; or the `Update screenshots`
-  workflow, which renders them in CI and commits them to its branch
+  `npm run test:screenshots -- --update-snapshots`, and the new screenshots committed; or the `update-screenshots`
+  label on the pull request: CI renders them and commits them to its branch
 - A screenshot that does not match → the test fails; in CI, the actual one, the expected one and their diff
   in the run's artifacts
 - No browser → skipped, except in CI

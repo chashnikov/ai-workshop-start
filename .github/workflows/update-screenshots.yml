@@ -1,17 +1,22 @@
 # The demo's screenshots (e2e/screenshots/), rendered again as CI renders them, and committed to the branch it is
-# run on: after a change to the page, on purpose. Actions → Update screenshots → Run workflow, or
+# run on: after a change to the page, on purpose. The `update-screenshots` label on a pull request, or
 # `gh workflow run update-screenshots.yml --ref <branch>`.
 name: Update screenshots
 on:
   workflow_dispatch:
+  pull_request:
+    types: [labeled]
 permissions:
   contents: write
 jobs:
   update:
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'update-screenshots'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.head_ref || github.ref }}
       - uses: actions/setup-node@v7
         with:
           node-version: 24
