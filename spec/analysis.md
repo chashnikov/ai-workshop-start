@@ -1,6 +1,6 @@
 # Repository analysis
 ## Input
-A **GitHub repository** URL, or a local directory
+A **GitHub repository** URL, or a local directory; or a **GitHub organization** URL, see [Organization](#organization)
 ## Output
 Every `SKILL.md`: **name**, **description**, **link**, **content**
 ## Architecture
@@ -18,3 +18,13 @@ Skill is defined by a `<root>/skills/<name>/SKILL.md` file where:
 * `<root>`: one of `.agents`, `.claude`, `agent`, `.github` directory located in the repository root;
 * Skills with the same name in different roots are the same skill: listed once, the others are its copies.
 * Files in other directories must not be considered as skills.
+## Organization
+A **GitHub organization** URL: `https://github.com/<organization>`, or `https://github.com/orgs/<organization>`;
+a user's `https://github.com/<user>` too
+- Every repository of the organization is scanned; only those that **have skills** are shown, sorted by **id**,
+  each with the number of its skills, as defined above
+- With `GITHUB_TOKEN`: one code search over the whole organization (at most 1000 `SKILL.md` files: a *warning*
+  for the rest); without it: each repository's tree at its default branch, a few at a time
+- A repository that cannot be listed, an empty one say → a *warning*, the scan goes on;
+  the rate limit → the clear message, the scan stops
+- Unknown organization → `Organization not found: https://github.com/<organization>`, exit code 1

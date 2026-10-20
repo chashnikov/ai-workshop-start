@@ -2,20 +2,25 @@
 // A thin client like the CLI: it scans on every request and stores nothing.
 import { createServer, type Server } from 'node:http';
 import { AtlasError } from './core/errors.ts';
+import { parseGitHubOrganizationUrl, parseGitHubUrl, type OrganizationResult } from './core/github.ts';
 import { firstSentence, skillLink, type Repository, type Skill } from './core/model.ts';
 import { scan, type ScanResult, type Source } from './core/scan.ts';
 
 export type WebOptions = {
   /** Opens the repository the page asks for. */
   open(input: string): Promise<Source>;
+  /** Lists the repositories with skills of the organization the page asks for. */
+  organization?(input: string): Promise<OrganizationResult>;
 };
 
 /**
  * `GET /` is the form; `GET /?repo=<URL>` is the form and the repository's skills; `&filter=<words>`
  * only the skills whose names contain every word (the page's script then filters as the words are typed).
+ * `GET /?repo=<organization URL>` is a chooser of its repositories with skills; it chooses with
+ * `?org=<organization URL>&repo=<URL>`: the chooser again, then the repository's skills.
  * Only for this machine's own addresses: a page elsewhere must not read it through DNS rebinding.
  */
-export function createWebServer({ open }: WebOptions): Server {
+export function createWebServer({ open, organization }: WebOptions): Server {
   return createServer(async (request, response) => {
     const send = (status: number, html: string, headers: Record<string, string> = {}) => {
       response.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8', ...headers });
@@ -36,8 +41,12 @@ export function createWebServer({ open }: WebOptions): Server {
     const input = url.searchParams.get('repo')?.trim() ?? '';
     if (!input) return send(200, page(''));
     const filter = url.searchParams.get('filter')?.trim() ?? '';
+    const org = (organization && url.searchParams.get('org')?.trim()) || '';
     try {
-      send(200, page(input, result(await scan(await open(input)), input, filter)));
+      if (organization && parseGitHubOrganizationUrl(input)) return send(200, page(input, repositories(await organization(input), '')));
+      // Both at once: each one is requests to GitHub.
+      const [listed, scanned] = await Promise.all([org ? organization?.(org) : undefined, open(input).then(scan)]);
+      send(200, page(input, `${listed ? repositories(listed, input) : ''}${result(scanned, input, filter, listed ? listed.organization.url : '')}`));
     } catch (failure) {
       if (failure instanceof AtlasError) return send(400, page(input, error(failure.message)));
       send(500, page(input, error(`Unexpected error: ${failure instanceof Error ? failure.message : String(failure)}`)));
@@ -59,7 +68,7 @@ function page(input: string, content = ''): string {
 <header>
 <h1><a href="/">Skill Atlas</a></h1>
 <form method="get" action="/">
-<input type="text" name="repo" value="${escape(input)}" placeholder="https://github.com/owner/repo" aria-label="GitHub repository URL" required>
+<input type="text" name="repo" value="${escape(input)}" placeholder="https://github.com/owner/repo or https://github.com/organization" aria-label="GitHub repository or organization URL" required>
 <button type="submit">Show skills</button>
 </form>
 </header>
@@ -70,13 +79,41 @@ function page(input: string, content = ''): string {
 }
 
 /**
+ * `<organization> · N repositories with skills`, the warnings, then a chooser of them: no script, a
+ * form that asks for the chosen repository, with the organization to show the chooser again.
+ */
+function repositories({ organization, repositories, warnings }: OrganizationResult, input: string): string {
+  const count = `${repositories.length} ${repositories.length === 1 ? 'repository' : 'repositories'} with skills`;
+  const heading = `<h2 class="organization"><a href="${escape(organization.url)}">${escape(organization.id)}</a> · ${count}</h2>
+${warnings.length ? `<ul class="warnings">${warnings.map((warning) => `<li>warning: ${escape(warning)}</li>`).join('')}</ul>` : ''}`;
+  if (!repositories.length) return `${heading}\n<p class="empty">No repositories with skills found.</p>`;
+  const name = parseGitHubUrl(input);
+  const chosen = name ? `${name.owner}/${name.repo}`.toLowerCase() : '';
+  const any = repositories.some((repository) => repository.id.toLowerCase() === chosen);
+  const options = repositories.map((repository) => {
+    const selected = repository.id.toLowerCase() === chosen ? ' selected' : '';
+    const skills = `${repository.skills} ${repository.skills === 1 ? 'skill' : 'skills'}`;
+    return `<option value="${escape(repository.url)}"${selected}>${escape(repository.id)} · ${skills}</option>`;
+  });
+  return `${heading}
+<form class="chooser" method="get" action="/">
+<input type="hidden" name="org" value="${escape(organization.url)}">
+<select name="repo" aria-label="Repository" required>
+<option value=""${any ? '' : ' selected'} disabled>Choose a repository</option>
+${options.join('\n')}
+</select>
+<button type="submit">Show skills</button>
+</form>`;
+}
+
+/**
  * `<owner>/<repo> · N skills`, the warnings, then master-detail: the filter and the skills on the
  * left, the selected one on the right. Every skill is on the page, those that do not pass the filter
  * `hidden`, so selecting one is `#<anchor>` and CSS `:target`, with the first one shown selected by
  * default: no request. The filter is the request's, then FILTER's as the field changes: the anchors
  * are the unfiltered ones, so a link selects the same skill with or without a filter.
  */
-function result({ repository, skills, warnings }: ScanResult, input: string, filter: string): string {
+function result({ repository, skills, warnings }: ScanResult, input: string, filter: string, org: string): string {
   const count = `${skills.length} ${skills.length === 1 ? 'skill' : 'skills'}`;
   const commit = repository.commit ? ` at <code>${escape(repository.commit.slice(0, 7))}</code>` : '';
   const anchors = anchorsOf(skills);
@@ -94,7 +131,7 @@ ${selected},
 .skills:not(:has(.detail:target:not([hidden]))) .list li:nth-child(1 of :not([hidden])) a { background: #ddf4ff; border-color: #54aeff; }
 </style>
 <div class="skills">
-<nav class="list">${filterForm(input, filter)}<ul>
+<nav class="list">${filterForm(input, filter, org)}<ul>
 ${all.map(({ skill, anchor, shown }) => listItem(skill, anchor, shown)).join('\n')}
 </ul>
 <p class="empty no-match"${none ? '' : ' hidden'}>No skills match &#8220;${escape(filter)}&#8221;.</p>
@@ -140,9 +177,9 @@ field.form.addEventListener('submit', (event) => event.preventDefault());
  * Above the list: only the skills whose names contain every word, for the same repository. No button:
  * the script filters as the field changes; without it, Enter submits the field.
  */
-function filterForm(input: string, filter: string): string {
+function filterForm(input: string, filter: string, org: string): string {
   return `<form class="filter" method="get" action="/">
-<input type="hidden" name="repo" value="${escape(input)}">
+${org ? `<input type="hidden" name="org" value="${escape(org)}">\n` : ''}<input type="hidden" name="repo" value="${escape(input)}">
 <input type="search" name="filter" value="${escape(filter)}" placeholder="Filter by name" aria-label="Filter skills by name">
 </form>`;
 }
@@ -195,7 +232,9 @@ header h1 a { color: inherit; text-decoration: none; }
 header form { display: flex; flex: 1; gap: .5rem; min-width: 20rem; }
 .filter { display: flex; margin-bottom: .75rem; }
 .filter input { min-width: 0; }
-input { flex: 1; font: inherit; padding: .4rem .6rem; border: 1px solid #d0d7de; border-radius: 6px; }
+.chooser { display: flex; gap: .5rem; max-width: 40rem; margin-bottom: 1rem; }
+select { min-width: 0; background: #fff; }
+input, select { flex: 1; font: inherit; padding: .4rem .6rem; border: 1px solid #d0d7de; border-radius: 6px; }
 button { font: inherit; padding: .4rem .9rem; border: 1px solid #1f883d; border-radius: 6px; background: #1f883d; color: #fff; cursor: pointer; }
 a { color: #0969da; }
 .skills { display: grid; grid-template-columns: minmax(14rem, 22rem) 1fr; gap: 1.5rem; align-items: start; }

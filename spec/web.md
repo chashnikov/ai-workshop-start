@@ -27,8 +27,16 @@ A **GitHub repository** URL, in the page's form: `GET /?repo=<URL>`
 - Narrow screens: the list above the skill; selecting one scrolls to it
 - Warnings on the page; the scan goes on
 - Repository content is *text*, never markup: it is escaped, shown as written
+## Organization
+A **GitHub organization** URL in the same form: `GET /?repo=<organization URL>`, as in [analysis.md](analysis.md#organization)
+- `<organization> · N repositories with skills`, linked to the organization; the warnings
+- A **chooser** of the repositories with skills, sorted by **id**: `<owner>/<repo> · N skills`; nothing chosen yet.
+  *No script*: a form, `Show skills` submits it
+- Choosing one is `GET /?org=<organization URL>&repo=<repository URL>`: the chooser again, the repository chosen,
+  then the repository's skills, as above; the filter keeps the organization
+- No repository with skills → `No repositories with skills found.`, no chooser
 ## Errors
-- Not a GitHub URL, or an unreachable repository → the clear message on the page, status 400
+- Not a GitHub URL, or an unreachable repository or organization → the clear message on the page, status 400
 - Another host → 403; another path → 404, `//<path>` too
 - `HEAD`: the headers only, *no scan*; another method → 405, with `Allow: GET, HEAD`
 - A port that is not a number, is over 65535, or is taken → a clear message, exit code 1
