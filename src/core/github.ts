@@ -71,7 +71,7 @@ type Found = { path: string; repository: { full_name: string } };
  * Code search looks at the whole default branch, 100 results a page; GitHub returns at most 1000
  * results, ten pages, and those found in time when the search times out: a warning for each.
  */
-async function search(github: Client, qualifiers: string, warnings: string[], what = 'SKILL.md files'): Promise<Found[]> {
+async function search(github: Client, qualifiers: string, warnings: string[]): Promise<Found[]> {
   const found = new Map<string, Found>(); // pages can repeat a result
   for (let page = 1; page <= 10; page++) {
     const result = await github.json<{ total_count: number; incomplete_results?: boolean; items: Found[] }>(
@@ -79,11 +79,11 @@ async function search(github: Client, qualifiers: string, warnings: string[], wh
     );
     for (const item of result.items) found.set(`${item.repository?.full_name}:${item.path}`, item);
     if (result.incomplete_results) {
-      warnings.push(`GitHub code search timed out; some ${what} may be missing`);
+      warnings.push('GitHub code search timed out; some SKILL.md files may be missing');
       break;
     }
     if (result.items.length < 100 || page * 100 >= result.total_count) break;
-    if (page === 10) warnings.push(`GitHub returns at most 1000 ${what}; ${result.total_count - 1000} more were left out`);
+    if (page === 10) warnings.push(`GitHub returns at most 1000 SKILL.md files; ${result.total_count - 1000} more were left out`);
   }
   return [...found.values()];
 }
@@ -110,9 +110,9 @@ export type OrganizationOptions = GitHubOptions & {
 const PARALLEL = 8;
 
 /**
- * Every repository of an organization, or of a user, that has skills: with a token, through a code
- * search over all of them and one over the forks; without it, through each repository's tree at its
- * default branch. A repository that cannot be listed, or read, is a warning, and the scan goes on.
+ * Every repository of an organization, or of a user, that has skills, forks left out: with a token,
+ * through a code search over all of them; without it, through each repository's tree at its default
+ * branch. A repository that cannot be listed, or read, is a warning, and the scan goes on.
  */
 export async function scanOrganization(input: string, options: OrganizationOptions): Promise<OrganizationResult> {
   const name = parseGitHubOrganizationUrl(input);
@@ -205,22 +205,17 @@ async function inParallel<T>(items: T[], each: (item: T, index: number) => Promi
   await Promise.all(Array.from({ length: Math.min(PARALLEL, items.length) }, worker));
 }
 
-/**
- * Code search over the whole organization, forks too: the files that may be skills, by repository.
- * Code search leaves out forks, which the trees include, and `fork:true` finds only forks (as GitHub
- * answers): one search for each.
- */
+/** Code search over the whole organization, which leaves out forks: the files that may be skills, by repository. */
 async function searchOrganization(github: Client, qualifier: string, warnings: string[]): Promise<Map<string, Listing>> {
   const listings = new Map<string, Listing>();
-  const found = [...(await search(github, qualifier, warnings)), ...(await search(github, `${qualifier}+fork:true`, warnings, 'SKILL.md files in forks'))];
-  for (const { path, repository } of found) {
+  for (const { path, repository } of await search(github, qualifier, warnings)) {
     const listing = listings.get(repository.full_name) ?? { paths: [], warnings: [] };
     listings.set(repository.full_name, { ...listing, paths: [...listing.paths, path] });
   }
   return listings;
 }
 
-/** Each repository's tree at its default branch, a few at a time: the files that may be skills, by repository. */
+/** Each repository's tree at its default branch, a few at a time, forks left out: the files that may be skills, by repository. */
 async function organizationTrees(
   github: Client,
   options: GitHubOptions,
@@ -230,8 +225,8 @@ async function organizationTrees(
 ): Promise<Map<string, Listing>> {
   const repositories: { full_name: string; default_branch: string }[] = [];
   for (let page = 1; ; page++) {
-    const result = await github.json<{ full_name: string; default_branch: string }[]>(`${list}&per_page=100&page=${page}`);
-    repositories.push(...result);
+    const result = await github.json<{ full_name: string; default_branch: string; fork?: boolean }[]>(`${list}&per_page=100&page=${page}`);
+    repositories.push(...result.filter((repository) => !repository.fork));
     if (result.length < 100) break;
   }
   // In the listed order, however the requests finish.

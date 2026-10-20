@@ -21,10 +21,10 @@ function owner(login: string, type: 'Organization' | 'User'): Recording {
 }
 
 /** The repositories' list, 100 a page, as GitHub pages it. */
-function list(url: string, repositories: { id: string; branch?: string }[]): Recording {
+function list(url: string, repositories: { id: string; branch?: string; fork?: boolean }[]): Recording {
   const recording: Recording = {};
   for (let page = 1; page === 1 || (page - 1) * 100 <= repositories.length; page++) {
-    const items = repositories.slice((page - 1) * 100, page * 100).map(({ id, branch = 'main' }) => ({ full_name: id, default_branch: branch }));
+    const items = repositories.slice((page - 1) * 100, page * 100).map(({ id, branch = 'main', fork = false }) => ({ full_name: id, default_branch: branch, fork }));
     recording[`${url}&per_page=100&page=${page}`] = { status: 200, body: items };
     if (items.length < 100) break;
   }
@@ -67,24 +67,23 @@ const TOOLS = {
 
 /**
  * Acme, an organization: Acme/tools with two skills (one with a copy), Acme/agents with one on a
- * `release/1` branch, Acme/forked, a fork, with one, Acme/docs with none, and Acme/empty, which
- * GitHub cannot list.
+ * `release/1` branch, Acme/docs with none, Acme/empty, which GitHub cannot list, and Acme/forked, a
+ * fork: nothing is recorded for it, so asking GitHub about it fails.
  */
 const ACME: Recording = {
   ...owner('Acme', 'Organization'),
-  ...list(`${API}/orgs/Acme/repos?type=all`, [{ id: 'Acme/tools' }, { id: 'Acme/docs' }, { id: 'Acme/empty' }, { id: 'Acme/agents', branch: 'release/1' }, { id: 'Acme/forked' }]),
+  ...list(`${API}/orgs/Acme/repos?type=all`, [{ id: 'Acme/tools' }, { id: 'Acme/docs' }, { id: 'Acme/empty' }, { id: 'Acme/agents', branch: 'release/1' }, { id: 'Acme/forked', fork: true }]),
   ...tree('Acme/tools', Object.keys(TOOLS)),
   ...tree('Acme/docs', ['README.md', 'skills/SKILL.md']),
   [`${API}/repos/Acme/empty/git/trees/main?recursive=1`]: { status: 409, body: { message: 'Git Repository is empty.' } },
   // A branch name with `/`: resolved to its commit first.
   [`${API}/repos/Acme/agents/commits/release/1`]: { status: 200, body: { sha: COMMIT } },
   ...tree('Acme/agents', ['agent/skills/deploy/SKILL.md'], COMMIT),
-  ...tree('Acme/forked', ['.claude/skills/upstream/SKILL.md']),
   // For reading their skills: each repository with skills at its commit.
   ...repository('Acme/tools', TOOLS),
   ...repository('Acme/agents', { 'agent/skills/deploy/SKILL.md': skill('deploy') }, 'release/1'),
-  ...repository('Acme/forked', { '.claude/skills/upstream/SKILL.md': skill('upstream') }),
-  // With a token: a code search over the organization, which finds other files named SKILL.md too...
+  // With a token: a code search over the organization, which finds other files named SKILL.md too,
+  // and leaves out forks.
   [`${API}/search/code?q=filename:SKILL.md+org:Acme&per_page=100&page=1`]: {
     status: 200,
     body: {
@@ -98,17 +97,7 @@ const ACME: Recording = {
       ],
     },
   },
-  // ...which leaves out forks, and one over its forks: `fork:true` finds only them.
-  [`${API}/search/code?q=filename:SKILL.md+org:Acme+fork:true&per_page=100&page=1`]: {
-    status: 200,
-    body: { total_count: 1, items: [{ path: '.claude/skills/upstream/SKILL.md', repository: { full_name: 'Acme/forked' } }] },
-  },
 };
-
-/** No forks with SKILL.md files, for a search qualifier. */
-function noForks(qualifier: string): Recording {
-  return { [`${API}/search/code?q=filename:SKILL.md+${qualifier}+fork:true&per_page=100&page=1`]: { status: 200, body: { total_count: 0, items: [] } } };
-}
 
 /** octo, a user: the user's own repositories, and `user:` in the code search. */
 const OCTO: Recording = {
@@ -119,7 +108,6 @@ const OCTO: Recording = {
     status: 200,
     body: { total_count: 1, items: [{ path: '.claude/skills/shell/SKILL.md', repository: { full_name: 'octo/dotfiles' } }] },
   },
-  ...noForks('user:octo'),
 };
 
 /** Plain, an organization whose repositories have no skills. */
@@ -168,11 +156,9 @@ async function atlas(args: string[], fetch = github, token?: string) {
 }
 
 const ACME_OUTPUT = [
-  'Acme · 3 repositories with skills',
+  'Acme · 2 repositories with skills',
   'Acme/agents · 1 skill',
   '  https://github.com/Acme/agents',
-  'Acme/forked · 1 skill',
-  '  https://github.com/Acme/forked',
   'Acme/tools · 2 skills',
   '  https://github.com/Acme/tools',
 ].join('\n');
@@ -195,6 +181,16 @@ test('scan <organization URL>: only the repositories with skills, sorted by id, 
   assert.doesNotMatch(result.stdout, /Acme\/docs|Acme\/empty/);
 });
 
+test('scan <organization URL>: forks are not processed, with or without GITHUB_TOKEN', async () => {
+  for (const token of [undefined, 'test']) {
+    const requests: string[] = [];
+    const result = await atlas(['scan', 'https://github.com/Acme'], (url, init) => (requests.push(url), github(url, init)), token);
+    assert.equal(result.code, 0, result.stderr);
+    assert.doesNotMatch(result.stdout, /Acme\/forked/);
+    assert.deepEqual(requests.filter((url) => url.includes('Acme/forked') || url.includes('fork:')), []);
+  }
+});
+
 test('scan <organization URL>: a repository that cannot be listed is a warning, and the scan goes on', async () => {
   const result = await atlas(['scan', 'https://github.com/orgs/Acme']);
   assert.equal(result.code, 0);
@@ -204,7 +200,7 @@ test('scan <organization URL>: a repository that cannot be listed is a warning, 
   );
 });
 
-test('scan <organization URL> with GITHUB_TOKEN: a code search over the organization, one over its forks, the same repositories', async () => {
+test('scan <organization URL> with GITHUB_TOKEN: a code search over the organization, the same repositories', async () => {
   const requests: string[] = [];
   const result = await atlas(['scan', 'https://github.com/Acme'], (url, init) => (requests.push(url), github(url, init)), 'test');
   assert.equal(result.code, 0, result.stderr);
@@ -213,7 +209,6 @@ test('scan <organization URL> with GITHUB_TOKEN: a code search over the organiza
   assert.deepEqual(requests, [
     `${API}/users/Acme`,
     `${API}/search/code?q=filename:SKILL.md+org:Acme&per_page=100&page=1`,
-    `${API}/search/code?q=filename:SKILL.md+org:Acme+fork:true&per_page=100&page=1`,
   ]);
 });
 
@@ -224,19 +219,11 @@ test('GITHUB_TOKEN: a code search that timed out → what it found, and a warnin
       status: 200,
       body: { total_count: 1, incomplete_results: true, items: [{ path: '.claude/skills/a/SKILL.md', repository: { full_name: 'Slow/a' } }] },
     },
-    [`${API}/search/code?q=filename:SKILL.md+org:Slow+fork:true&per_page=100&page=1`]: {
-      status: 200,
-      body: { total_count: 1, incomplete_results: true, items: [{ path: '.claude/skills/b/SKILL.md', repository: { full_name: 'Slow/b' } }] },
-    },
   });
   const result = await atlas(['scan', 'https://github.com/Slow'], timedOut, 'test');
   assert.equal(result.code, 0, result.stderr);
-  assert.match(result.stdout, /^Slow\/a · 1 skill\n.*\nSlow\/b · 1 skill$/m);
-  // Each search says which one it was.
-  assert.equal(
-    result.stderr,
-    ['warning: GitHub code search timed out; some SKILL.md files may be missing', 'warning: GitHub code search timed out; some SKILL.md files in forks may be missing'].join('\n'),
-  );
+  assert.match(result.stdout, /^Slow\/a · 1 skill$/m);
+  assert.equal(result.stderr, 'warning: GitHub code search timed out; some SKILL.md files may be missing');
 });
 
 test("a user's URL: the user's own repositories, with or without GITHUB_TOKEN", async () => {
@@ -275,22 +262,16 @@ test('a repository whose tree is too large: only its skill roots, its root tree 
   assert.equal(requests.filter((url) => url === `${API}/repos/Big/mono/git/trees/main`).length, 1);
 });
 
-test('GITHUB_TOKEN: at most 1000 SKILL.md files from each code search, a warning for the rest', async () => {
+test('GITHUB_TOKEN: at most 1000 SKILL.md files from the code search, a warning for the rest', async () => {
   const recording: Recording = owner('Huge', 'Organization');
-  for (const [fork, repository, total] of [['', 'Huge/skills', 1500], ['+fork:true', 'Huge/fork', 1200]] as const) {
-    for (let page = 1; page <= 10; page++) {
-      const items = Array.from({ length: 100 }, (_, n) => ({ path: `.claude/skills/s${(page - 1) * 100 + n}/SKILL.md`, repository: { full_name: repository } }));
-      recording[`${API}/search/code?q=filename:SKILL.md+org:Huge${fork}&per_page=100&page=${page}`] = { status: 200, body: { total_count: total, items } };
-    }
+  for (let page = 1; page <= 10; page++) {
+    const items = Array.from({ length: 100 }, (_, n) => ({ path: `.claude/skills/s${(page - 1) * 100 + n}/SKILL.md`, repository: { full_name: 'Huge/skills' } }));
+    recording[`${API}/search/code?q=filename:SKILL.md+org:Huge&per_page=100&page=${page}`] = { status: 200, body: { total_count: 1500, items } };
   }
   const result = await atlas(['scan', 'https://github.com/Huge'], replay(recording), 'test');
   assert.equal(result.code, 0, result.stderr);
-  assert.match(result.stdout, /^Huge\/fork · 1000 skills$/m);
   assert.match(result.stdout, /^Huge\/skills · 1000 skills$/m);
-  assert.equal(
-    result.stderr,
-    ['warning: GitHub returns at most 1000 SKILL.md files; 500 more were left out', 'warning: GitHub returns at most 1000 SKILL.md files in forks; 200 more were left out'].join('\n'),
-  );
+  assert.equal(result.stderr, 'warning: GitHub returns at most 1000 SKILL.md files; 500 more were left out');
 });
 
 test('the rate limit → the clear message, the scan stops, exit code 1', async () => {
@@ -334,7 +315,7 @@ test('scan <organization URL>: the progress as it goes, cleared before the resul
   const result = await atlas(['scan', 'https://github.com/Acme']);
   assert.deepEqual(result.progress, [
     'Listing the repositories of Acme…',
-    ...[0, 1, 2, 3, 4, 5].map((done) => `Listed ${done} of 5 repositories of Acme…`),
+    ...[0, 1, 2, 3, 4].map((done) => `Listed ${done} of 4 repositories of Acme…`),
     '',
   ]);
   const searched = await atlas(['scan', 'https://github.com/Acme'], github, 'test');
@@ -352,11 +333,10 @@ test('reading the skills as the organization is scanned: each repository as a sc
     result.repositories.map(({ id, skills, result }) => ({ id, skills, names: result?.skills.map((skill) => `${skill.name}@${skill.commit}`) })),
     [
       { id: 'Acme/agents', skills: 1, names: [`deploy@${COMMIT}`] },
-      { id: 'Acme/forked', skills: 1, names: [`upstream@${COMMIT}`] },
       { id: 'Acme/tools', skills: 2, names: [`review@${COMMIT}`, `testing@${COMMIT}`] },
     ],
   );
-  assert.deepEqual(progress.slice(-4), [0, 1, 2, 3].map((done) => `Read the skills of ${done} of 3 repositories…`));
+  assert.deepEqual(progress.slice(-3), [0, 1, 2].map((done) => `Read the skills of ${done} of 2 repositories…`));
 });
 
 test('reading the skills: a repository that cannot be read is a warning, still listed, and the scan goes on', async () => {
@@ -382,11 +362,10 @@ test('reading the skills: the rate limit stops the reading, not the scan; the li
     result.repositories.map(({ id, skills, result }) => ({ id, skills, read: Boolean(result) })),
     [
       { id: 'Acme/agents', skills: 1, read: false },
-      { id: 'Acme/forked', skills: 1, read: false },
       { id: 'Acme/tools', skills: 2, read: false },
     ],
   );
-  assert.equal(result.warnings.at(-1), 'the skills of 3 repositories were not read: GitHub rate limit reached; set GITHUB_TOKEN');
+  assert.equal(result.warnings.at(-1), 'the skills of 2 repositories were not read: GitHub rate limit reached; set GITHUB_TOKEN');
 });
 
 test('reading the skills: a repository whose tree is too large keeps its warning, as a scan of it does', async () => {
@@ -455,7 +434,7 @@ function chooser(html: string) {
 test('web: an organization URL → its id, linked, the number of repositories with skills, and a chooser', async () => {
   const page = await get(`repo=${encodeURIComponent('https://github.com/Acme')}`);
   assert.equal(page.status, 200);
-  assert.match(page.html, /<h2 class="organization"><a href="https:\/\/github.com\/Acme">Acme<\/a> · 3 repositories with skills<\/h2>/);
+  assert.match(page.html, /<h2 class="organization"><a href="https:\/\/github.com\/Acme">Acme<\/a> · 2 repositories with skills<\/h2>/);
   assert.match(page.html, /<ul class="warnings"><li>warning: Acme\/empty: cannot be listed: [^<]*<\/li><\/ul>/);
   assert.deepEqual(chooser(page.html), {
     org: 'https://github.com/Acme',
@@ -463,7 +442,6 @@ test('web: an organization URL → its id, linked, the number of repositories wi
     options: [
       { value: '', text: 'Choose a repository', selected: true },
       { value: 'https://github.com/Acme/agents', text: 'Acme/agents · 1 skill', selected: false },
-      { value: 'https://github.com/Acme/forked', text: 'Acme/forked · 1 skill', selected: false },
       { value: 'https://github.com/Acme/tools', text: 'Acme/tools · 2 skills', selected: false },
     ],
   });
@@ -498,9 +476,9 @@ test('web: choosing a repository → the chooser again, the repository chosen, t
   ]);
   // Another one, chosen then: scanned, the organization not listed again.
   requests.length = 0;
-  const other = await get(`org=${encodeURIComponent('https://github.com/Acme')}&repo=${encodeURIComponent('https://github.com/Acme/forked')}`);
-  assert.deepEqual([...other.html.matchAll(/<span class="name">([^<]*)<\/span>/g)].map(([, name]) => name), ['upstream']);
-  assert.ok(requests.includes(`${API}/repos/Acme/forked`));
+  const other = await get(`org=${encodeURIComponent('https://github.com/Acme')}&repo=${encodeURIComponent('https://github.com/Acme/agents')}`);
+  assert.deepEqual([...other.html.matchAll(/<span class="name">([^<]*)<\/span>/g)].map(([, name]) => name), ['deploy']);
+  assert.ok(requests.includes(`${API}/repos/Acme/agents`));
   assert.ok(!requests.includes(`${API}/users/Acme`));
 });
 
@@ -528,17 +506,17 @@ test('web: the organization page shows the progress as it loads, then only what 
   assert.equal(response.status, 200);
   const reader = response.body!.pipeThrough(new TextDecoderStream()).getReader();
   let html = '';
-  while (!html.includes('Listed 0 of 5 repositories of Acme…')) html += (await reader.read()).value;
+  while (!html.includes('Listed 0 of 4 repositories of Acme…')) html += (await reader.read()).value;
   assert.doesNotMatch(html, /class="chooser"|<\/html>/);
   release();
   for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read()) html += chunk.value;
   const progress = /<div class="progress" role="status">\n([\s\S]*?)<\/div>\n<h2 class="organization">/.exec(html)?.[1];
   assert.deepEqual(progress?.trim().split('\n'), [
     '<p>Listing the repositories of Acme…</p>',
-    ...[0, 1, 2, 3, 4, 5].map((done) => `<p>Listed ${done} of 5 repositories of Acme…</p>`),
-    ...[0, 1, 2, 3].map((done) => `<p>Read the skills of ${done} of 3 repositories…</p>`),
+    ...[0, 1, 2, 3, 4].map((done) => `<p>Listed ${done} of 4 repositories of Acme…</p>`),
+    ...[0, 1, 2].map((done) => `<p>Read the skills of ${done} of 2 repositories…</p>`),
   ]);
-  assert.equal(chooser(html)?.options.length, 4);
+  assert.equal(chooser(html)?.options.length, 3);
   // Only the latest progress, and none once the page has what it found: CSS, no script.
   assert.match(html, /\.progress p:not\(:last-child\), \.progress:not\(:last-child\) \{ display: none; \}/);
   assert.doesNotMatch(html, /<script/);
@@ -646,8 +624,8 @@ test('web: the rate limit while the skills are read → the chooser all the same
   await once(limited, 'listening');
   after(() => limited.close());
   const html = await (await fetch(`http://127.0.0.1:${(limited.address() as AddressInfo).port}/?repo=github.com%2FAcme`)).text();
-  assert.equal(chooser(html)?.options.length, 4);
-  assert.match(html, /<li>warning: the skills of 3 repositories were not read: GitHub rate limit reached; set GITHUB_TOKEN<\/li>/);
+  assert.equal(chooser(html)?.options.length, 3);
+  assert.match(html, /<li>warning: the skills of 2 repositories were not read: GitHub rate limit reached; set GITHUB_TOKEN<\/li>/);
   assert.doesNotMatch(html, /<p class="error">/);
 });
 
