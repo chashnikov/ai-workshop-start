@@ -36,14 +36,15 @@ test('demo: a video of the filter, with no display and no network', { skip: !bro
   assert.deepEqual([...video.subarray(0, 4)], [0x1a, 0x45, 0xdf, 0xa3]);
   assert.ok(video.length > 50_000, `${video.length} bytes`);
   // What it shows: every skill, then the filter as it is typed, a selection, several words, no match, empty.
-  const steps = stdout.split('\n').filter((line) => line.includes(' | ')).map((line) => line.split(' | ')[1]);
+  // The selection is the address's anchor: #skill-commits from the click on, as the filter keeps it.
+  const steps = stdout.split('\n').filter((line) => line.includes(' | ')).map((line) => line.split(' | ').slice(1).join(' | '));
   assert.deepEqual(steps, [
-    '“” → code-style, commits, release-checklist, testing',
-    '“co” → code-style, commits',
-    '“co” → code-style, commits',
-    '“co st” → code-style',
-    '“zzz” → No skills match',
-    '“” → code-style, commits, release-checklist, testing',
+    '“” → code-style, commits, release-checklist, testing | no anchor',
+    '“co” → code-style, commits | no anchor',
+    '“co” → code-style, commits | #skill-commits',
+    '“co st” → code-style | #skill-commits',
+    '“zzz” → No skills match | #skill-commits',
+    '“” → code-style, commits, release-checklist, testing | #skill-commits',
   ]);
 });
 

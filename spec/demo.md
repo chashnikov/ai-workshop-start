@@ -5,7 +5,7 @@
 - What it shows, each step with a caption and the page's address:
   every skill; `co` typed *letter by letter*; a matching skill selected; `co st`, several words; `zzz`, no match;
   the field emptied, every skill again
-- Prints each step, the words and the skills shown, then `Recorded: <file>`
+- Prints each step, the words, the skills shown and the address's anchor (the selected skill), then `Recorded: <file>`
 ## Errors
 - `--out` not a `.webm` file, or other arguments → the usage, exit code 1
 - No browser → how to install it, `npx playwright install --only-shell chromium`, exit code 1

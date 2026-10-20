@@ -1,17 +1,17 @@
 #!/usr/bin/env node
 // `npm run demo [-- --out <file>]`: a video of the web view's filter, recorded in a headless browser,
 // so it works where there is no display: a remote machine, a container, CI. ./fixture is served as if
-// it were on GitHub, from tests/helpers.ts: no network, no token.
+// it were on GitHub, as in the tests (src/core/fixture.ts): no network, no token.
 import { once } from 'node:events';
 import { mkdir, rm } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { chromium, type Page } from 'playwright';
+import { fixtureOnGitHub } from '../src/core/fixture.ts';
 import { openGitHub } from '../src/core/github.ts';
 import { replay } from '../src/core/replay.ts';
 import { createWebServer } from '../src/web.ts';
-import { fixtureOnGitHub } from '../tests/helpers.ts';
 
 const usage = 'Usage: npm run demo [-- --out <file.webm>]';
 const SIZE = { width: 1280, height: 720 };
@@ -88,12 +88,13 @@ async function type(page: Page, text: string) {
   await filterField(page).pressSequentially(text, { delay: KEY_DELAY });
 }
 
-/** A caption over the page, with the address that keeps the words; the skills shown, printed. */
+/** A caption over the page, with the address that keeps the words; the skills shown and the address's anchor, printed. */
 async function step(page: Page, caption: string) {
   await page.evaluate(`(${CAPTION})(${JSON.stringify(caption)})`);
   const shown = await page.locator('.list li:not([hidden]) .name').allTextContents();
   const filter = await filterField(page).inputValue();
-  console.log(`${caption} | “${filter}” → ${shown.join(', ') || 'No skills match'}`);
+  const anchor = new URL(page.url()).hash || 'no anchor';
+  console.log(`${caption} | “${filter}” → ${shown.join(', ') || 'No skills match'} | ${anchor}`);
   await page.waitForTimeout(PAUSE);
 }
 
