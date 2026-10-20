@@ -221,18 +221,22 @@ async function inParallel<T>(items: T[], each: (item: T, index: number) => Promi
   await Promise.all(Array.from({ length: Math.min(PARALLEL, items.length) }, worker));
 }
 
-/** Runs the tasks given to it, at most `count` at a time, the others as those finish. */
-function limit(count: number): <T>(task: () => Promise<T>) => Promise<T> {
+/**
+ * Runs the tasks given to it, at most `count` at a time, the others as those finish. A finished task
+ * hands its place to the next one waiting: `running` never drops in between, for a newcomer to take it.
+ */
+export function limit(count: number): <T>(task: () => Promise<T>) => Promise<T> {
   let running = 0;
   const waiting: (() => void)[] = [];
   return async (task) => {
     if (running >= count) await new Promise<void>((resolve) => waiting.push(resolve));
-    running++;
+    else running++;
     try {
       return await task();
     } finally {
-      running--;
-      waiting.shift()?.();
+      const next = waiting.shift();
+      if (next) next();
+      else running--;
     }
   };
 }

@@ -6,7 +6,7 @@ import { once } from 'node:events';
 import type { AddressInfo } from 'node:net';
 import { after, test } from 'node:test';
 import { run } from '../src/commands.ts';
-import { openGitHub, parseGitHubOrganizationUrl, parseGitHubUrl, scanOrganization, type Fetch } from '../src/core/github.ts';
+import { limit, openGitHub, parseGitHubOrganizationUrl, parseGitHubUrl, scanOrganization, type Fetch } from '../src/core/github.ts';
 import { history } from '../src/core/fixture.ts';
 import { replay, type Recording } from '../src/core/replay.ts';
 import { scan } from '../src/core/scan.ts';
@@ -410,6 +410,28 @@ test('reading the skills: at most 8 requests for the last updates at the same ti
   const result = await scanOrganization('https://github.com/Many', { fetch, read: true });
   assert.deepEqual(result.repositories.map(({ result }) => result?.skills.filter((skill) => skill.updated).length), names.map(() => 10));
   assert.equal(most, 8);
+});
+
+test('the limit of requests at the same time: a finished one hands its place to one waiting, not to one arriving', async () => {
+  let running = 0;
+  let most = 0;
+  const run = limit(2);
+  const work = (until: Promise<void>) => async () => {
+    most = Math.max(most, ++running);
+    await until;
+    running--;
+  };
+  const never = new Promise<void>(() => {});
+  let end!: () => void;
+  let first!: Promise<void>;
+  void run(() => (first = work(new Promise<void>((resolve) => (end = resolve)))()));
+  void run(work(never));
+  void run(work(never)); // waits for a place
+  // Arrives as the first one ends, just after the limit sees it end: before the one waiting goes on.
+  void first.then(() => run(work(never)));
+  end();
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(most, 2);
 });
 
 test('reading the skills: a repository whose tree is too large keeps its warning, as a scan of it does', async () => {
