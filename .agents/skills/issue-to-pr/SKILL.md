@@ -14,7 +14,11 @@ Attach a sample MP4 video to the pull request that shows the change working in t
 - Record it headless, it works without a display: `npm run demo -- --out recordings/demo.webm`
   (once: `npx playwright install --only-shell chromium`).
 - Convert it to MP4: `ffmpeg -y -i recordings/demo.webm -c:v libx264 -pix_fmt yuv420p -movflags +faststart recordings/demo.mp4`.
-- Check a few frames (`ffmpeg -i recordings/demo.mp4 -vf fps=1/2,scale=640:-1,tile=3x2 -frames:v 1 frames.png`) before attaching it.
+  It needs an `ffmpeg` with libx264 (`.air/cloud/startup.sh` installs one as root; Playwright's own is VP8-only).
+  If there is none and you cannot install it (`apt-get install -y ffmpeg`), attach `recordings/demo.webm` as `demo.webm` instead,
+  and say in the pull request description why it is not an MP4.
+- Check a few frames (`ffmpeg -i recordings/demo.webm -vf fps=1/2,scale=640:-1,tile=3x2 -frames:v 1 recordings/frames.png`,
+  in `recordings/`, which is ignored) before attaching it.
 - GitHub has no API for attachments, so attach it through the `pr-videos` branch, never the pull request's own branch:
   commit it as `pr-<number>/demo.mp4` there (create the branch as an orphan if it does not exist yet),
   push, and add `[Sample video](https://github.com/<owner>/<repo>/blob/pr-videos/pr-<number>/demo.mp4)` to the pull request description.
