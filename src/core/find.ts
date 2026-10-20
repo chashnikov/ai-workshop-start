@@ -5,12 +5,19 @@ export type SkillFile = { path: string; name: string; copies: string[] };
 export const SKILL_ROOTS = ['.agents/skills', '.claude/skills', '.github/skills', 'agent/skills'];
 
 /**
- * Every file named exactly SKILL.md, named after its directory (a SKILL.md at the
- * root after the repository). Each copy is a skill of its own, and nothing is ignored.
+ * Every `<root>/skills/<name>/SKILL.md`, named after its directory; nothing else is a skill.
+ * The same name in other roots is the same skill: the first path is the skill, the rest its copies.
  */
-export function findSkills(paths: string[], repositoryName: string): SkillFile[] {
-  return paths
-    .filter((path) => path.split('/').at(-1) === 'SKILL.md')
-    .sort()
-    .map((path) => ({ path, name: path.split('/').at(-2) ?? repositoryName, copies: [] }));
+export function findSkills(paths: string[]): SkillFile[] {
+  const skills = new Map<string, SkillFile>();
+  for (const path of [...paths].sort()) {
+    const segments = path.split('/');
+    if (segments.length !== 4 || segments[3] !== 'SKILL.md') continue;
+    if (!SKILL_ROOTS.includes(`${segments[0]}/${segments[1]}`)) continue;
+    const name = segments[2];
+    const skill = skills.get(name);
+    if (skill) skill.copies.push(path);
+    else skills.set(name, { path, name, copies: [] });
+  }
+  return [...skills.values()];
 }

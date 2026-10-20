@@ -5,6 +5,8 @@ Read [./spec](spec/) first. Update it with the code.
 Integration tests for every case in the spec.
 ## Definition of done
 - All tests pass locally
+- the CI build must be green
+- Open a PR when done
 
 ## Commands
 - `npm ci`: first, in a fresh checkout
