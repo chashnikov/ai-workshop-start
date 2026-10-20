@@ -61,7 +61,7 @@ type Found = { path: string; repository: { full_name: string } };
  * Code search looks at the whole default branch, 100 results a page; GitHub returns at most 1000
  * results, ten pages, and those found in time when the search times out: a warning for each.
  */
-async function search(github: Client, qualifiers: string, warnings: string[]): Promise<Found[]> {
+async function search(github: Client, qualifiers: string, warnings: string[], what = 'SKILL.md files'): Promise<Found[]> {
   const found = new Map<string, Found>(); // pages can repeat a result
   for (let page = 1; page <= 10; page++) {
     const result = await github.json<{ total_count: number; incomplete_results?: boolean; items: Found[] }>(
@@ -69,11 +69,11 @@ async function search(github: Client, qualifiers: string, warnings: string[]): P
     );
     for (const item of result.items) found.set(`${item.repository?.full_name}:${item.path}`, item);
     if (result.incomplete_results) {
-      warnings.push('GitHub code search timed out; some SKILL.md files may be missing');
+      warnings.push(`GitHub code search timed out; some ${what} may be missing`);
       break;
     }
     if (result.items.length < 100 || page * 100 >= result.total_count) break;
-    if (page === 10) warnings.push(`GitHub returns at most 1000 SKILL.md files; ${result.total_count - 1000} more were left out`);
+    if (page === 10) warnings.push(`GitHub returns at most 1000 ${what}; ${result.total_count - 1000} more were left out`);
   }
   return [...found.values()];
 }
@@ -93,8 +93,8 @@ export type OrganizationResult = {
 const PARALLEL = 8;
 
 /**
- * Every repository of an organization, or of a user, that has skills: with a token, through one code
- * search over all of them; without it, through each repository's tree at its default branch.
+ * Every repository of an organization, or of a user, that has skills: with a token, through a code
+ * search over all of them and one over the forks; without it, through each repository's tree at its default branch.
  * A repository that cannot be listed is a warning, and the scan goes on.
  */
 export async function scanOrganization(input: string, options: GitHubOptions): Promise<OrganizationResult> {
@@ -124,7 +124,7 @@ export async function scanOrganization(input: string, options: GitHubOptions): P
  */
 async function searchOrganization(github: Client, qualifier: string, warnings: string[]): Promise<Map<string, string[]>> {
   const paths = new Map<string, string[]>();
-  const found = [...(await search(github, qualifier, warnings)), ...(await search(github, `${qualifier}+fork:true`, warnings))];
+  const found = [...(await search(github, qualifier, warnings)), ...(await search(github, `${qualifier}+fork:true`, warnings, 'SKILL.md files in forks'))];
   for (const { path, repository } of found) {
     paths.set(repository.full_name, [...(paths.get(repository.full_name) ?? []), path]);
   }

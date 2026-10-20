@@ -199,12 +199,19 @@ test('GITHUB_TOKEN: a code search that timed out → what it found, and a warnin
       status: 200,
       body: { total_count: 1, incomplete_results: true, items: [{ path: '.claude/skills/a/SKILL.md', repository: { full_name: 'Slow/a' } }] },
     },
-    ...noForks('org:Slow'),
+    [`${API}/search/code?q=filename:SKILL.md+org:Slow+fork:true&per_page=100&page=1`]: {
+      status: 200,
+      body: { total_count: 1, incomplete_results: true, items: [{ path: '.claude/skills/b/SKILL.md', repository: { full_name: 'Slow/b' } }] },
+    },
   });
   const result = await atlas(['scan', 'https://github.com/Slow'], timedOut, 'test');
   assert.equal(result.code, 0, result.stderr);
-  assert.match(result.stdout, /^Slow\/a · 1 skill$/m);
-  assert.equal(result.stderr, 'warning: GitHub code search timed out; some SKILL.md files may be missing');
+  assert.match(result.stdout, /^Slow\/a · 1 skill\n.*\nSlow\/b · 1 skill$/m);
+  // Each search says which one it was.
+  assert.equal(
+    result.stderr,
+    ['warning: GitHub code search timed out; some SKILL.md files may be missing', 'warning: GitHub code search timed out; some SKILL.md files in forks may be missing'].join('\n'),
+  );
 });
 
 test("a user's URL: the user's own repositories, with or without GITHUB_TOKEN", async () => {
@@ -243,17 +250,22 @@ test('a repository whose tree is too large: only its skill roots, its root tree 
   assert.equal(requests.filter((url) => url === `${API}/repos/Big/mono/git/trees/main`).length, 1);
 });
 
-test('GITHUB_TOKEN: at most 1000 SKILL.md files from the code search, a warning for the rest', async () => {
+test('GITHUB_TOKEN: at most 1000 SKILL.md files from each code search, a warning for the rest', async () => {
   const recording: Recording = owner('Huge', 'Organization');
-  for (let page = 1; page <= 10; page++) {
-    const items = Array.from({ length: 100 }, (_, n) => ({ path: `.claude/skills/s${(page - 1) * 100 + n}/SKILL.md`, repository: { full_name: 'Huge/skills' } }));
-    recording[`${API}/search/code?q=filename:SKILL.md+org:Huge&per_page=100&page=${page}`] = { status: 200, body: { total_count: 1500, items } };
+  for (const [fork, repository, total] of [['', 'Huge/skills', 1500], ['+fork:true', 'Huge/fork', 1200]] as const) {
+    for (let page = 1; page <= 10; page++) {
+      const items = Array.from({ length: 100 }, (_, n) => ({ path: `.claude/skills/s${(page - 1) * 100 + n}/SKILL.md`, repository: { full_name: repository } }));
+      recording[`${API}/search/code?q=filename:SKILL.md+org:Huge${fork}&per_page=100&page=${page}`] = { status: 200, body: { total_count: total, items } };
+    }
   }
-  Object.assign(recording, noForks('org:Huge'));
   const result = await atlas(['scan', 'https://github.com/Huge'], replay(recording), 'test');
   assert.equal(result.code, 0, result.stderr);
+  assert.match(result.stdout, /^Huge\/fork · 1000 skills$/m);
   assert.match(result.stdout, /^Huge\/skills · 1000 skills$/m);
-  assert.equal(result.stderr, 'warning: GitHub returns at most 1000 SKILL.md files; 500 more were left out');
+  assert.equal(
+    result.stderr,
+    ['warning: GitHub returns at most 1000 SKILL.md files; 500 more were left out', 'warning: GitHub returns at most 1000 SKILL.md files in forks; 200 more were left out'].join('\n'),
+  );
 });
 
 test('the rate limit → the clear message, the scan stops, exit code 1', async () => {
