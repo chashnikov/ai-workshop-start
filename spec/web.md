@@ -29,7 +29,7 @@ A **GitHub repository** URL, in the page's form: `GET /?repo=<URL>`
 - The *first* skill is selected by default, the first one of the first group; selecting another is `#skill-<name>`: *no new scan*, no script (CSS), a link to share
 - In `<name>`, anything but letters, digits, `_` and `-` is `-`; the same anchor again gets `-2`, `-3`…
 - Selecting a skill *does not move the page*: scrolled down, the list and the skill stay where they were, skills below the
-  first screen too (warnings above them, say); at the top, the repository stays *in view*. A link to a skill: the page at the top
+  first screen too (warnings above them, say); at the top, the repository stays *in view*. A link to a skill: the page at the top (narrow screens: at the skill)
 - No skills → `No skills found.`
 - **Filter**: a text field *above the list*, *no button*; `&filter=<words>` shows only the skills whose **name**
   contains *every* word, in any order, ignoring case; words are separated by spaces; empty → every skill
@@ -40,7 +40,7 @@ A **GitHub repository** URL, in the page's form: `GET /?repo=<URL>`
   - The anchors stay those of the whole list; the *first matching* skill is selected by default,
     a link to a skill that does not match too
   - No skill matches → `No skills match “<words>”.`, the field still there
-- Narrow screens: the list above the skill; selecting one scrolls to it
+- Narrow screens: the list above the skill; selecting one scrolls to it, a link to one too
 - Warnings on the page; the scan goes on
 - Repository content is *text*, never markup: it is escaped, shown as written
 ## Organization

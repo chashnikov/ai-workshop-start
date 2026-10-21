@@ -56,6 +56,8 @@ async function clickSkill(page: Page, name: string) {
 }
 
 const scrollY = (page: Page) => page.evaluate<number>('scrollY');
+const scrollable = (page: Page) => page.evaluate<number>('document.documentElement.scrollHeight - innerHeight');
+const fixtureInOrganization = () => `${base}?org=${encodeURIComponent('https://github.com/JetBrains')}&repo=${encodeURIComponent('https://github.com/JetBrains/fixture')}`;
 const top = (page: Page, selector: string): Promise<number> => page.locator(selector).first().evaluate((element) => (element as any).getBoundingClientRect().top);
 
 test('selecting a skill does not move the page, scrolled down to skills below the first screen', async ({ page }) => {
@@ -76,19 +78,23 @@ test('selecting a skill does not move the page, scrolled down to skills below th
 });
 
 test('selecting a skill at the top keeps the page at the top: the repository stays in view', async ({ page }) => {
-  await page.setViewportSize({ width: 1280, height: 1600 });
+  await page.setViewportSize({ width: 1280, height: 1200 });
   await chooseFixture(page);
+  expect(await scrollable(page)).toBeGreaterThan(0);
   expect(await scrollY(page)).toBe(0);
-  await clickSkill(page, 'testing');
+  await clickSkill(page, 'commits');
   await page.waitForTimeout(300);
   expect(await scrollY(page)).toBe(0);
   expect(await top(page, 'h2.repository')).toBeGreaterThanOrEqual(0);
 });
 
-test('a link to a skill shows the page at the top', async ({ page }) => {
+test('a link to a skill shows the page at the top, the skills below the first screen too', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 720 });
-  await page.goto(`${base}?repo=${encodeURIComponent('https://github.com/JetBrains/fixture')}#skill-testing`);
+  await page.goto(`${fixtureInOrganization()}#skill-testing`);
   await expect(page.locator('.detail:visible h3')).toHaveText('testing');
+  expect(await top(page, '.skills')).toBeGreaterThan(720);
+  expect(await scrollable(page)).toBeGreaterThan(0);
+  await page.waitForTimeout(300);
   expect(await scrollY(page)).toBe(0);
 });
 
@@ -97,8 +103,19 @@ test('narrow screens: the list above the skill; selecting one scrolls to it', as
   await page.goto(`${base}?repo=${encodeURIComponent('https://github.com/JetBrains/fixture')}`);
   expect(await top(page, '.list')).toBeLessThan(await top(page, '.details'));
   await clickSkill(page, 'testing');
-  // Its top 1rem below the window's, as far as the page scrolls.
-  const max = await page.evaluate<number>('document.documentElement.scrollHeight - innerHeight');
-  await expect.poll(async () => Math.min(max, await scrollY(page) + await top(page, '.detail:visible') - 16)).toBe(await scrollY(page));
-  expect(await scrollY(page)).toBeGreaterThan(0);
+  await scrolledTo(page, '.detail:visible');
 });
+
+test('narrow screens: a link to a skill scrolls to it', async ({ page }) => {
+  await page.setViewportSize({ width: 600, height: 720 });
+  await page.goto(`${fixtureInOrganization()}#skill-testing`);
+  await expect(page.locator('.detail:visible h3')).toHaveText('testing');
+  await scrolledTo(page, '.detail:visible');
+});
+
+/** Scrolled so that its top is 1rem below the window's, as far as the page scrolls. */
+async function scrolledTo(page: Page, selector: string) {
+  const max = await scrollable(page);
+  await expect.poll(async () => Math.min(max, await scrollY(page) + await top(page, selector) - 16)).toBe(await scrollY(page));
+  expect(await scrollY(page)).toBeGreaterThan(0);
+}
