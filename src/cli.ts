@@ -4,6 +4,7 @@
 import { once } from 'node:events';
 import type { AddressInfo } from 'node:net';
 import { run } from './commands.ts';
+import { claudeCluster } from './core/claude.ts';
 import { AtlasError } from './core/errors.ts';
 import { openGitHub, parseGitHubUrl, scanOrganization } from './core/github.ts';
 import { openDirectory } from './local.ts';
@@ -24,6 +25,8 @@ process.exitCode = await run(process.argv.slice(2), {
       open: (input) => openGitHub(input, { fetch, token }),
       // Read when the page asks (the organization's page): choosing a repository then shows its skills at once.
       organization: (input, { read, progress } = {}) => scanOrganization(input, { fetch, token, read, progress }),
+      // Similar skills, as a small model groups them: `claude -p`, `SKILL_ATLAS_CLAUDE` if it is elsewhere.
+      cluster: claudeCluster({ command: process.env.SKILL_ATLAS_CLAUDE || undefined }),
     });
     server.listen(port, '127.0.0.1');
     try {
