@@ -98,27 +98,31 @@ test('a link to a skill shows the page at the top, the skills below the first sc
   expect(await scrollY(page)).toBe(0);
 });
 
+// Narrow screens: a window short enough for the page to scroll the skill to the top, not only to the bottom.
+const NARROW = { width: 600, height: 240 };
+
 test('narrow screens: the list above the skill; selecting one scrolls to it', async ({ page }) => {
-  await page.setViewportSize({ width: 600, height: 720 });
+  await page.setViewportSize(NARROW);
   await page.goto(`${base}?repo=${encodeURIComponent('https://github.com/JetBrains/fixture')}`);
   expect(await top(page, '.list')).toBeLessThan(await top(page, '.details'));
+  await page.locator('.list a[href="#skill-testing"]').evaluate((element) => element.scrollIntoView({ block: 'end' }));
   await clickSkill(page, 'testing');
   await scrolledTo(page, '.detail:visible');
 });
 
 test('narrow screens: a link to a skill scrolls to it', async ({ page }) => {
-  await page.setViewportSize({ width: 600, height: 720 });
+  await page.setViewportSize(NARROW);
   await page.goto(`${fixtureInOrganization()}#skill-testing`);
   await expect(page.locator('.detail:visible h3')).toHaveText('testing');
   await scrolledTo(page, '.detail:visible');
 });
 
-/** Scrolled so that its top is 1rem below the window's, as far as the page scrolls. */
+/** Scrolled so that its top is 1rem below the window's, with room left below: not only to the page's bottom. */
 async function scrolledTo(page: Page, selector: string) {
   const max = await scrollable(page);
   // Polled as one value, the page and the element read together: the page may still be scrolling.
   await expect.poll(() => page.locator(selector).first().evaluate((element, max) => {
     const { scrollY } = element.ownerDocument.defaultView!;
-    return scrollY > 0 && Math.abs(Math.min(max, scrollY + (element as any).getBoundingClientRect().top - 16) - scrollY) < 1;
+    return scrollY > 0 && scrollY < max && Math.abs((element as any).getBoundingClientRect().top - 16) < 1;
   }, max)).toBe(true);
 }
