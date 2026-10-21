@@ -1,6 +1,7 @@
 // The demo's screenshot test (e2e/demo.spec.ts): `npm run test:screenshots`, part of `npm test`.
 // The screenshots are kept in Git, in e2e/screenshots/, rendered by Playwright's headless Chromium on Linux,
-// as in CI; `npm run test:screenshots -- --update-snapshots` renders them again, after a change to the page.
+// as in CI; `npm run test:screenshots -- --update-snapshots=all` renders them again, after a change to the page:
+// all of them, a change within maxDiffPixelRatio too.
 import { defineConfig } from '@playwright/test';
 import { SIZE } from './scripts/demo.ts';
 

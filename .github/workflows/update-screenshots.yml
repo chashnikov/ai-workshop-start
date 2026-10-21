@@ -23,7 +23,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx playwright install --with-deps --only-shell chromium
-      - run: npm run test:screenshots -- --update-snapshots
+      # All of them: a change within maxDiffPixelRatio (playwright.config.ts) passes the test, but is a change all the same.
+      - run: npm run test:screenshots -- --update-snapshots=all
       - name: Commit the screenshots
         run: |
           git add e2e/screenshots

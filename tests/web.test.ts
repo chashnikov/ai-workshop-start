@@ -12,7 +12,7 @@ import { replay, type Recording } from '../src/core/replay.ts';
 import { run } from '../src/commands.ts';
 import { scan } from '../src/core/scan.ts';
 import { createWebServer } from '../src/web.ts';
-import { CLI, COMMIT, EXAMPLE, EXAMPLE_COMMIT, FIXTURE, FIXTURE_UPDATED, fixtureOnGitHub, history, onGitHub } from './helpers.ts';
+import { CLI, COMMIT, EXAMPLE, EXAMPLE_COMMIT, FIXTURE, FIXTURE_UPDATED, fixtureOnGitHub, history, NOW, onGitHub } from './helpers.ts';
 
 /** A skill whose front matter and content are markup. */
 const MARKUP = onGitHub('markup', {
@@ -43,6 +43,7 @@ const counted: Fetch = (url, init) => {
 // Code search for JetBrains/example, as EXAMPLE answers it; the tree for the others.
 const server = createWebServer({
   open: (input) => openGitHub(input, { fetch: counted, token: /example/.test(input) ? 'test' : undefined }),
+  now: () => NOW,
 });
 const base = await listen(server);
 after(() => {
@@ -91,13 +92,16 @@ test('a repository: its id, linked, the commit, and its skill with its descripti
   assert.match(page.html, /<pre class="content"># Commits<\/pre>/);
 });
 
-/** The left column's items: each skill's anchor, name, summary and when it was last updated; the `hidden` ones too with `all`. */
+/**
+ * The left column's items: each skill's anchor, name, summary and when it was last updated: the time, its tooltip and
+ * how long ago; the `hidden` ones too with `all`.
+ */
 function items(html: string, all = false) {
   const nav = /<nav class="list">([\s\S]*?)<\/nav>/.exec(html)?.[1] ?? '';
-  const item = /<li( hidden)?><a href="#([^"]+)"><span class="name">(.*?)<\/span>(?:<span class="summary">(.*?)<\/span>)?(?:<time class="updated" datetime="([^"]*)">(.*?)<\/time>)?<\/a><\/li>/g;
+  const item = /<li( hidden)?><a href="#([^"]+)"><span class="name">(.*?)<\/span>(?:<span class="summary">(.*?)<\/span>)?(?:<time class="updated" datetime="([^"]*)" title="([^"]*)">(.*?)<\/time>)?<\/a><\/li>/g;
   return [...nav.matchAll(item)]
     .filter(([, hidden]) => all || !hidden)
-    .map(([, , anchor, name, summary, datetime, updated]) => ({ anchor, name, summary, datetime, updated }));
+    .map(([, , anchor, name, summary, datetime, title, updated]) => ({ anchor, name, summary, datetime, title, updated }));
 }
 
 /** The left column: each skill's anchor, name and summary; the `hidden` ones too with `all`. */
@@ -128,14 +132,46 @@ test('./fixture on GitHub: the skills, sorted by name, in the left column, with 
   assert.doesNotMatch(page.html, /not-a-skill/);
 });
 
-test('./fixture on GitHub: each skill in the list shows the date and time it was last updated, in UTC', async () => {
+test('./fixture on GitHub: each skill in the list shows how long ago it was last updated, its date and time in UTC as the tooltip', async () => {
   const page = await view('github.com/JetBrains/fixture');
-  assert.deepEqual(items(page.html).map(({ name, datetime, updated }) => ({ name, datetime, updated })), [
-    { name: 'code-style', datetime: '2026-09-14T08:12:45.000Z', updated: 'Updated 2026-09-14 08:12 UTC' },
-    { name: 'commits', datetime: '2026-10-20T15:05:21.000Z', updated: 'Updated 2026-10-20 15:05 UTC' },
-    { name: 'release-checklist', datetime: '2026-03-02T23:59:59.000Z', updated: 'Updated 2026-03-02 23:59 UTC' },
-    { name: 'testing', datetime: '2025-12-31T07:00:00.000Z', updated: 'Updated 2025-12-31 07:00 UTC' },
+  assert.deepEqual(items(page.html).map(({ name, datetime, title, updated }) => ({ name, datetime, title, updated })), [
+    { name: 'code-style', datetime: '2026-09-14T08:12:45.000Z', title: '2026-09-14 08:12 UTC', updated: 'Updated 1 month ago' },
+    { name: 'commits', datetime: '2026-10-20T15:05:21.000Z', title: '2026-10-20 15:05 UTC', updated: 'Updated 20 hours ago' },
+    { name: 'release-checklist', datetime: '2026-03-02T23:59:59.000Z', title: '2026-03-02 23:59 UTC', updated: 'Updated 7 months ago' },
+    { name: 'testing', datetime: '2025-12-31T07:00:00.000Z', title: '2025-12-31 07:00 UTC', updated: 'Updated 9 months ago' },
   ]);
+});
+
+test('last updated: how long ago, in its largest whole unit, as of the time the page is served', async () => {
+  const id = 'JetBrains/history';
+  const github = replay({
+    ...onGitHub('history', { '.claude/skills/one/SKILL.md': '---\nname: one\ndescription: One.\n---\n' }),
+    ...history(id, COMMIT, '.claude/skills/one/SKILL.md', '2026-10-20T12:00:00Z'),
+  });
+  let clock = 0;
+  const server = createWebServer({ open: (input) => openGitHub(input, { fetch: github }), now: () => clock });
+  const base = await listen(server);
+  const updated = async (now: string) => {
+    clock = Date.parse(now);
+    return items(await (await fetch(`${base}?repo=${encodeURIComponent(`https://github.com/${id}`)}`)).text())[0].updated;
+  };
+  try {
+    assert.equal(await updated('2026-10-20T11:00:00Z'), 'Updated just now', 'a time still to come');
+    assert.equal(await updated('2026-10-20T12:00:59Z'), 'Updated just now');
+    assert.equal(await updated('2026-10-20T12:01:00Z'), 'Updated 1 minute ago');
+    assert.equal(await updated('2026-10-20T12:59:59Z'), 'Updated 59 minutes ago');
+    assert.equal(await updated('2026-10-20T13:00:00Z'), 'Updated 1 hour ago');
+    assert.equal(await updated('2026-10-21T11:59:59Z'), 'Updated 23 hours ago');
+    assert.equal(await updated('2026-10-21T12:00:00Z'), 'Updated 1 day ago');
+    assert.equal(await updated('2026-11-18T12:00:00Z'), 'Updated 29 days ago');
+    assert.equal(await updated('2026-11-19T12:00:00Z'), 'Updated 1 month ago');
+    assert.equal(await updated('2027-10-19T12:00:00Z'), 'Updated 12 months ago');
+    assert.equal(await updated('2027-10-20T12:00:00Z'), 'Updated 1 year ago');
+    assert.equal(await updated('2029-10-20T12:00:00Z'), 'Updated 3 years ago');
+  } finally {
+    server.closeAllConnections();
+    server.close();
+  }
 });
 
 test('last updated: the last commit to the SKILL.md up to the scanned commit, a request per skill, a copy not asked for', async () => {
@@ -145,7 +181,7 @@ test('last updated: the last commit to the SKILL.md up to the scanned commit, a 
   assert.deepEqual(asked.sort(), Object.keys(FIXTURE_UPDATED).map((path) => `https://api.github.com/repos/JetBrains/fixture/commits?sha=${COMMIT}&path=${path}&per_page=1`).sort());
 });
 
-test('last updated: a time with a zone offset is shown in UTC; no commit → nothing shown', async () => {
+test('last updated: a time with a zone offset is shown in UTC, as of it; no commit → nothing shown', async () => {
   const id = 'JetBrains/history';
   const files = {
     '.claude/skills/offset/SKILL.md': '---\nname: offset\ndescription: An offset.\n---\n',
@@ -156,13 +192,13 @@ test('last updated: a time with a zone offset is shown in UTC; no commit → not
     ...history(id, COMMIT, '.claude/skills/offset/SKILL.md', '2026-10-20T23:30:00+02:00'),
     [`https://api.github.com/repos/${id}/commits?sha=${COMMIT}&path=.claude/skills/none/SKILL.md&per_page=1`]: { status: 200, body: [] },
   });
-  const server = createWebServer({ open: (input) => openGitHub(input, { fetch: github }) });
+  const server = createWebServer({ open: (input) => openGitHub(input, { fetch: github }), now: () => NOW });
   const base = await listen(server);
   try {
     const html = await (await fetch(`${base}?repo=${encodeURIComponent(`https://github.com/${id}`)}`)).text();
-    assert.deepEqual(items(html).map(({ name, updated }) => ({ name, updated })), [
-      { name: 'none', updated: undefined },
-      { name: 'offset', updated: 'Updated 2026-10-20 21:30 UTC' },
+    assert.deepEqual(items(html).map(({ name, title, updated }) => ({ name, title, updated })), [
+      { name: 'none', title: undefined, updated: undefined },
+      { name: 'offset', title: '2026-10-20 21:30 UTC', updated: 'Updated 14 hours ago' },
     ]);
     assert.doesNotMatch(html, /<li>warning: /);
   } finally {

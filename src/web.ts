@@ -15,7 +15,7 @@ export type WebOptions = {
    * it goes; with `read`, their skills too, so that choosing one of them shows its skills with no new scan.
    */
   organization?(input: string, options?: { read?: boolean; progress?(message: string): void }): Promise<OrganizationResult>;
-  /** The time, in milliseconds: when a kept organization is too old. `Date.now` by default. */
+  /** The time, in milliseconds: when a kept organization is too old, how long ago a skill was updated. `Date.now` by default. */
   now?(): number;
 };
 
@@ -107,7 +107,7 @@ export function createWebServer({ open, organization, now = Date.now }: WebOptio
       let chooser = '';
       if (listed instanceof AtlasError) chooser = `<ul class="warnings"><li>warning: no repository chooser: ${escape(listed.message)}</li></ul>\n`;
       else if (listed) chooser = repositories(listed, input);
-      send(200, page(input, `${chooser}${result(scanned, input, filter, org)}`));
+      send(200, page(input, `${chooser}${result(scanned, input, filter, org, now())}`));
     } catch (failure) {
       send(failure instanceof AtlasError ? 400 : 500, page(input, error(describe(failure))));
     }
@@ -189,7 +189,7 @@ ${options.join('\n')}
  * default: no request. The filter is the request's, then FILTER's as the field changes: the anchors
  * are the unfiltered ones, so a link selects the same skill with or without a filter.
  */
-function result({ repository, skills, warnings }: ScanResult, input: string, filter: string, org: string): string {
+function result({ repository, skills, warnings }: ScanResult, input: string, filter: string, org: string, now: number): string {
   const count = `${skills.length} ${skills.length === 1 ? 'skill' : 'skills'}`;
   const commit = repository.commit ? ` at <code>${escape(repository.commit.slice(0, 7))}</code>` : '';
   const anchors = anchorsOf(skills);
@@ -208,7 +208,7 @@ ${selected},
 </style>
 <div class="skills">
 <nav class="list">${filterForm(input, filter, org)}<ul>
-${all.map(({ skill, anchor, shown }) => listItem(skill, anchor, shown)).join('\n')}
+${all.map(({ skill, anchor, shown }) => listItem(skill, anchor, shown, now)).join('\n')}
 </ul>
 <p class="empty no-match"${none ? '' : ' hidden'}>No skills match &#8220;${escape(filter)}&#8221;.</p>
 </nav>
@@ -260,20 +260,34 @@ ${org ? `<input type="hidden" name="org" value="${escape(org)}">\n` : ''}<input 
 </form>`;
 }
 
-function listItem(skill: Skill, anchor: string, shown: boolean): string {
+function listItem(skill: Skill, anchor: string, shown: boolean, now: number): string {
   const summary = skill.description ? `<span class="summary">${escape(firstSentence(skill.description))}</span>` : '';
-  return `<li${shown ? '' : ' hidden'}><a href="#${anchor}"><span class="name">${escape(skill.name)}</span>${summary}${updated(skill.updated)}</a></li>`;
+  return `<li${shown ? '' : ' hidden'}><a href="#${anchor}"><span class="name">${escape(skill.name)}</span>${summary}${updated(skill.updated, now)}</a></li>`;
 }
 
 /**
- * `Updated 2026-10-20 15:05 UTC`: the same on every machine, with no script to show the reader's own time zone;
- * nothing when it is not known.
+ * `Updated 3 days ago`: how long ago, as of `now`, the same on every machine with no script; the date and
+ * time in UTC, `2026-10-20 15:05 UTC`, as its tooltip. Nothing when it is not known.
  */
-function updated(time: string): string {
+function updated(time: string, now: number): string {
   const date = new Date(time);
   if (!time || Number.isNaN(date.getTime())) return '';
   const iso = date.toISOString();
-  return `<time class="updated" datetime="${iso}">Updated ${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC</time>`;
+  return `<time class="updated" datetime="${iso}" title="${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC">Updated ${ago(now - date.getTime())}</time>`;
+}
+
+/** How long ago, in its largest whole unit: `just now` under a minute, and for a time still to come. */
+function ago(elapsed: number): string {
+  const minutes = Math.floor(elapsed / 60_000);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+  const [n, unit] =
+    days >= 365 ? [Math.floor(days / 365), 'year'] :
+    days >= 30 ? [Math.floor(days / 30), 'month'] :
+    days >= 1 ? [days, 'day'] :
+    hours >= 1 ? [hours, 'hour'] :
+    [minutes, 'minute'];
+  return n < 1 ? 'just now' : `${n} ${unit}${n === 1 ? '' : 's'} ago`;
 }
 
 function detail(repository: Repository, skill: Skill, anchor: string, shown: boolean): string {
