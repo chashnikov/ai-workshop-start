@@ -338,6 +338,6 @@ test('claude -p fails → a clear message: not found, an exit code, an error, no
     [`console.log('3');`, /^Error: claude printed no JSON: 3$/],
     [`console.log(JSON.stringify({ type: 'result', is_error: false, result: 'Sorry.' }));`, /^Error: claude answered no groups$/],
   ];
-  for (const [body, message] of cases) { const t = Date.now(); await assert.rejects(claudeCluster({ command: fakeClaude(body).command })(SKILLS), message); console.log('CASE', Date.now() - t); }
+  for (const [body, message] of cases) await assert.rejects(claudeCluster({ command: fakeClaude(body).command })(SKILLS), message);
   await assert.rejects(claudeCluster({ command: fakeClaude('setTimeout(() => {}, 10000);').command, timeout: 200 })(SKILLS), /took more than 0.2 s$/);
 });
