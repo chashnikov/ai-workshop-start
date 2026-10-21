@@ -31,11 +31,29 @@ const SAME_ANCHOR = onGitHub('same-anchor', {
   '.claude/skills/two/SKILL.md': '---\nname: a.b\ndescription: The second.\n---\nTwo.\n',
 });
 
+/**
+ * Similar skills: `gradle` and `release` in their names, `code` in two descriptions, `onboarding` like none;
+ * `kotlin` in every one, so not a group.
+ */
+const GROUPS = onGitHub('groups', {
+  '.claude/skills/release-tag/SKILL.md': '---\nname: release-tag\ndescription: Tags a Kotlin release.\n---\nTag.\n',
+  '.claude/skills/gradle-bump/SKILL.md': '---\nname: gradle-bump\ndescription: Bumps the Gradle version of Kotlin.\n---\nBump.\n',
+  '.claude/skills/lint/SKILL.md': '---\nname: lint\ndescription: Checks the Kotlin code style.\n---\nLint.\n',
+  '.claude/skills/releases/SKILL.md': '---\nname: releases\ndescription: Writes the notes of Kotlin releases.\n---\nNotes.\n',
+  '.claude/skills/onboarding/SKILL.md': '---\nname: onboarding\ndescription: Welcomes a new Kotlin teammate.\n---\nHello.\n',
+  '.claude/skills/formatting/SKILL.md': '---\nname: formatting\ndescription: Formats Kotlin code.\n---\nFormat.\n',
+  '.claude/skills/gradle-cache/SKILL.md': '---\nname: gradle-cache\ndescription: Clears the Gradle build cache for Kotlin.\n---\nClear.\n',
+});
+
+/** The default selection when the list is in groups: the first skill shown of the first group with one shown. */
+const FIRST_IN_GROUPS =
+  /\.skills:not\(:has\(\.detail:target:not\(\[hidden\]\)\)\) \.list \.group:nth-child\(1 of :has\(li:not\(\[hidden\]\)\)\) li:nth-child\(1 of :not\(\[hidden\]\)\) a \{ background/;
+
 /** No skills at all. */
 const EMPTY = onGitHub('empty', { 'README.md': '# Empty\n' });
 
 const requests: string[] = [];
-const github = replay({ ...EXAMPLE, ...fixtureOnGitHub(), ...MARKUP, ...SAME_NAME, ...SAME_ANCHOR, ...EMPTY });
+const github = replay({ ...EXAMPLE, ...fixtureOnGitHub(), ...MARKUP, ...SAME_NAME, ...SAME_ANCHOR, ...GROUPS, ...EMPTY });
 const counted: Fetch = (url, init) => {
   requests.push(url);
   return github(url, init);
@@ -301,7 +319,75 @@ test('the first skill is selected by default; a link to #<anchor> selects anothe
   for (const { anchor } of list(page.html)) {
     assert.ok(page.html.includes(`body:has(#${anchor}:target:not([hidden])) .list a[href="#${anchor}"]`), anchor);
   }
-  assert.match(page.html, /\.skills:not\(:has\(\.detail:target:not\(\[hidden\]\)\)\) \.list li:nth-child\(1 of :not\(\[hidden\]\)\) a \{ background/);
+  assert.match(page.html, FIRST_IN_GROUPS);
+});
+
+/** The left column's groups: each one's name and the names of its skills; the `hidden` ones too with `all`. */
+function groups(html: string, all = false) {
+  const nav = /<nav class="list">([\s\S]*?)<\/nav>/.exec(html)?.[1] ?? '';
+  return [...nav.matchAll(/<li class="group"><h3 class="group-name">(.*?)<\/h3><ul>([\s\S]*?)<\/ul><\/li>/g)].map(([, name, skills]) => ({
+    name: text(name),
+    skills: list(`<nav class="list">${skills}</nav>`, all).map((item) => item.name),
+  }));
+}
+
+test('groups: similar skills together, under the keyword they share in their names or descriptions; Other last', async () => {
+  const page = await view('https://github.com/JetBrains/groups');
+  assert.equal(page.status, 200);
+  assert.deepEqual(groups(page.html), [
+    // `code` in two descriptions only; `kotlin`, in every one, makes no group.
+    { name: 'code', skills: ['formatting', 'lint'] },
+    { name: 'gradle', skills: ['gradle-bump', 'gradle-cache'] },
+    // `release-tag` and `releases`: the keyword as most of them write it.
+    { name: 'release', skills: ['release-tag', 'releases'] },
+    { name: 'Other', skills: ['onboarding'] },
+  ]);
+  // On the right, in the same order; the anchors those of the list sorted by name.
+  assert.deepEqual([...details(page.html).keys()], ['skill-formatting', 'skill-lint', 'skill-gradle-bump', 'skill-gradle-cache', 'skill-release-tag', 'skill-releases', 'skill-onboarding']);
+  assert.deepEqual([...details(page.html).keys()], list(page.html).map((item) => item.anchor));
+});
+
+test('groups: the endings dropped, `commits` and `committing` are one keyword; a tie goes to the one in more names', async () => {
+  const page = await view('github.com/JetBrains/fixture');
+  // `commit`, in a name, before `change`, in descriptions only: then `testing` is alone.
+  assert.deepEqual(groups(page.html), [
+    { name: 'commit', skills: ['code-style', 'commits'] },
+    { name: 'Other', skills: ['release-checklist', 'testing'] },
+  ]);
+});
+
+test('groups: no keyword shared, or only by every skill → no groups, the list sorted by name', async () => {
+  for (const repo of ['https://github.com/JetBrains/example', 'https://github.com/JetBrains/same-name', 'https://github.com/JetBrains/markup']) {
+    const page = await view(repo);
+    assert.deepEqual(groups(page.html), [], repo);
+    assert.doesNotMatch(page.html, /class="group/, repo);
+    assert.match(page.html, /\.skills:not\(:has\(\.detail:target:not\(\[hidden\]\)\)\) \.list li:nth-child\(1 of :not\(\[hidden\]\)\) a \{ background/, repo);
+  }
+});
+
+test('groups: the first skill of the first group is selected by default, with no script; a group\'s name is text', async () => {
+  const page = await view('https://github.com/JetBrains/groups');
+  assert.match(page.html, FIRST_IN_GROUPS);
+  assert.match(page.html, /\.group:not\(:has\(li:not\(\[hidden\]\)\)\) \{ display: none; \}/);
+  assert.equal(scripts(page.html).length, 1);
+});
+
+test('groups and the filter: the groups stay those of the whole list; one with no skill shown is not shown', async () => {
+  const page = await filtered('https://github.com/JetBrains/groups', 'gradle');
+  assert.deepEqual(groups(page.html), [
+    { name: 'code', skills: [] },
+    { name: 'gradle', skills: ['gradle-bump', 'gradle-cache'] },
+    { name: 'release', skills: [] },
+    { name: 'Other', skills: [] },
+  ]);
+  assert.deepEqual(groups(page.html, true).map(({ name }) => name), ['code', 'gradle', 'release', 'Other']);
+  // The CSS hides the groups with no skill shown, as the script filters too.
+  assert.match(page.html, /\.group:not\(:has\(li:not\(\[hidden\]\)\)\) \{ display: none; \}/);
+  assert.deepEqual([...details(page.html).keys()], ['skill-gradle-bump', 'skill-gradle-cache']);
+  const browsed = browse((await view('https://github.com/JetBrains/groups')).html, base);
+  browsed.type('re');
+  assert.deepEqual(browsed.shown(), ['release-tag', 'releases']);
+  assert.deepEqual(browsed.sections(), ['skill-release-tag', 'skill-releases']);
 });
 
 test('anchors are letters, digits, _ and -, and unique even when skills share a name', async () => {
@@ -506,7 +592,7 @@ test('filter: the anchors stay those of the whole list; the first match is selec
   assert.ok(page.html.includes('body:has(#skill-testing:target:not([hidden])) .list a[href="#skill-testing"]'));
   // A link to a hidden skill selects the first match: the CSS ignores a hidden :target.
   assert.match(page.html, /<section class="detail" id="skill-commits" hidden>/);
-  assert.match(page.html, /\.skills:not\(:has\(\.detail:target:not\(\[hidden\]\)\)\) \.list li:nth-child\(1 of :not\(\[hidden\]\)\) a \{ background/);
+  assert.match(page.html, FIRST_IN_GROUPS);
   // `.` drops `a-b`, the first of the two: `a.b` keeps its whole-list anchor, and is selected.
   const anchor = await filtered('https://github.com/JetBrains/same-anchor', '.');
   assert.deepEqual(list(anchor.html).map(({ anchor, name }) => ({ anchor, name })), [{ anchor: 'skill-a-b-2', name: 'a.b' }]);
@@ -567,7 +653,7 @@ function browse(html: string, address: string) {
   const location = { href: address };
   const document = {
     querySelector: (selector: string) => ({ '.filter input[type=search]': field, '.no-match': none })[selector],
-    querySelectorAll: (selector: string) => ({ '.list li': items, '.details .detail': sections })[selector],
+    querySelectorAll: (selector: string) => ({ '.list li:not(.group)': items, '.details .detail': sections })[selector],
   };
   const history = { replaceState: (_state: unknown, _title: string, url: URL) => (location.href = String(url)) };
   runInNewContext(script, { document, location, history, URL });

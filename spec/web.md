@@ -16,7 +16,17 @@ A **GitHub repository** URL, in the page's form: `GET /?repo=<URL>`
   nothing when not known;
   the *selected* skill on the right: name, the *whole* description, the link pinned to the commit,
   `also in <paths>` for copies, and its **content**: the SKILL.md after the front matter
-- The *first* skill is selected by default; selecting another is `#skill-<name>`: *no new scan*, no script (CSS), a link to share
+- **Groups**: *similar* skills together in the list, each group under its name; on the right, the skills in the same order
+  - Similar: they share a **keyword** of their **name** and **description**: a word of *3 letters or more*, ignoring case,
+    but the common ones (`the`, `use`, `when`, `skill`…), its ending dropped: `-s`, `-es`, `-ed`, `-ing`, `-e`, and a doubled
+    last letter: `commits`, `committing` → `commit`
+  - The keyword shared by the *most* skills not in a group yet, *2* at least and *not every one of them*, makes a group of them; a tie:
+    the keyword in more of their names, then the first one in alphabetical order; again, until no keyword is shared
+  - Its name: the keyword as most of its skills write it, else the shortest, then the first; the groups sorted by **name**,
+    then `Other`: the skills in no group; in a group, the skills sorted by name
+  - No keyword shared → no groups: the list as it was, every skill sorted by name
+  - The filter: a group with no skill shown is not shown either; the groups stay those of the whole list
+- The *first* skill is selected by default, the first one of the first group; selecting another is `#skill-<name>`: *no new scan*, no script (CSS), a link to share
 - In `<name>`, anything but letters, digits, `_` and `-` is `-`; the same anchor again gets `-2`, `-3`…
 - Selecting a skill keeps the page at the top: the repository stays *in view*
 - No skills → `No skills found.`

@@ -73,7 +73,7 @@ async function step(page: Page, { caption }: Step) {
     await page.waitForTimeout(PAUSE);
     return;
   }
-  const shown = await page.locator('.list li:not([hidden]) .name').allTextContents();
+  const shown = await page.locator('.list li:not(.group):not([hidden]) .name').allTextContents();
   const filter = await filterField(page).inputValue();
   const anchor = new URL(page.url()).hash || 'no anchor';
   console.log(`${caption} | “${filter}” → ${shown.join(', ') || 'No skills match'} | ${anchor}`);

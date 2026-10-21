@@ -4,6 +4,7 @@
 import { createServer, type Server } from 'node:http';
 import { AtlasError } from './core/errors.ts';
 import { parseGitHubOrganizationUrl, parseGitHubUrl, type OrganizationResult } from './core/github.ts';
+import { groupSkills } from './core/group.ts';
 import { firstSentence, skillLink, type Repository, type Skill } from './core/model.ts';
 import { scan, type ScanResult, type Source } from './core/scan.ts';
 
@@ -187,7 +188,9 @@ ${options.join('\n')}
  * left, the selected one on the right. Every skill is on the page, those that do not pass the filter
  * `hidden`, so selecting one is `#<anchor>` and CSS `:target`, with the first one shown selected by
  * default: no request. The filter is the request's, then FILTER's as the field changes: the anchors
- * are the unfiltered ones, so a link selects the same skill with or without a filter.
+ * are the unfiltered ones, so a link selects the same skill with or without a filter. Similar skills are
+ * together in the list, under their group's name, and in the same order on the right; a group with no
+ * skill shown is not shown either.
  */
 function result({ repository, skills, warnings }: ScanResult, input: string, filter: string, org: string, now: number): string {
   const count = `${skills.length} ${skills.length === 1 ? 'skill' : 'skills'}`;
@@ -197,18 +200,28 @@ function result({ repository, skills, warnings }: ScanResult, input: string, fil
 ${warnings.length ? `<ul class="warnings">${warnings.map((warning) => `<li>warning: ${escape(warning)}</li>`).join('')}</ul>` : ''}`;
   if (!skills.length) return `${heading}\n<p class="empty">No skills found.</p>`;
   const words = filter.toLowerCase().split(/\s+/).filter(Boolean);
-  const all = skills.map((skill, index) => ({ skill, anchor: anchors[index], shown: words.every((word) => skill.name.toLowerCase().includes(word)) }));
+  const item = (skill: Skill) => ({ skill, anchor: anchors[skills.indexOf(skill)], shown: words.every((word) => skill.name.toLowerCase().includes(word)) });
+  const groups = groupSkills(skills).map(({ name, skills }) => ({ name, items: skills.map(item) }));
+  // In the order of the list, its groups', so that the first one shown is the first one on the right too.
+  const all = groups.length ? groups.flatMap(({ items }) => items) : skills.map(item);
   const none = all.every(({ shown }) => !shown);
   // The selected skill's item in the list: anchors are [\w-] only, safe in CSS as they are.
   const selected = all.map(({ anchor }) => `body:has(#${anchor}:target:not([hidden])) .list a[href="#${anchor}"]`).join(',\n');
+  // Else the first one shown: in the first group with one shown.
+  const first = groups.length ? '.list .group:nth-child(1 of :has(li:not([hidden]))) li:nth-child(1 of :not([hidden])) a' : '.list li:nth-child(1 of :not([hidden])) a';
+  const list = groups.length
+    ? groups.map(({ name, items }) => `<li class="group"><h3 class="group-name">${escape(name)}</h3><ul>
+${items.map(({ skill, anchor, shown }) => listItem(skill, anchor, shown, now)).join('\n')}
+</ul></li>`)
+    : all.map(({ skill, anchor, shown }) => listItem(skill, anchor, shown, now));
   return `${heading}
 <style>
 ${selected},
-.skills:not(:has(.detail:target:not([hidden]))) .list li:nth-child(1 of :not([hidden])) a { background: #ddf4ff; border-color: #54aeff; }
+.skills:not(:has(.detail:target:not([hidden]))) ${first} { background: #ddf4ff; border-color: #54aeff; }
 </style>
 <div class="skills">
 <nav class="list">${filterForm(input, filter, org)}<ul>
-${all.map(({ skill, anchor, shown }) => listItem(skill, anchor, shown, now)).join('\n')}
+${list.join('\n')}
 </ul>
 <p class="empty no-match"${none ? '' : ' hidden'}>No skills match &#8220;${escape(filter)}&#8221;.</p>
 </nav>
@@ -226,7 +239,7 @@ ${all.map(({ skill, anchor, shown }) => detail(repository, skill, anchor, shown)
  */
 const FILTER = `
 const field = document.querySelector('.filter input[type=search]');
-const items = [...document.querySelectorAll('.list li')];
+const items = [...document.querySelectorAll('.list li:not(.group)')];
 const details = [...document.querySelectorAll('.details .detail')];
 const none = document.querySelector('.no-match');
 field.addEventListener('input', () => {
@@ -349,6 +362,10 @@ a { color: #0969da; }
 .list .name { display: block; font-weight: 600; }
 .list .summary { display: block; font-size: .8125rem; color: #59636e; }
 .list .updated { display: block; font-size: .75rem; color: #59636e; }
+.group-name { font-size: .75rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: #59636e; margin: .75rem .75rem .25rem; }
+.group:first-child .group-name { margin-top: 0; }
+/* A group with no skill shown: the filter left none of it. */
+.group:not(:has(li:not([hidden]))) { display: none; }
 .detail { display: none; border: 1px solid #d0d7de; border-radius: 6px; padding: 0 1rem 1rem; min-width: 0; }
 .detail:target:not([hidden]), .details:not(:has(.detail:target:not([hidden]))) .detail:nth-child(1 of :not([hidden])) { display: block; }
 /* Selecting a skill scrolls to it; a margin taller than the screen keeps the page at the top, the repository in view. */

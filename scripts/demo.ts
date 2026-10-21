@@ -47,7 +47,7 @@ export async function playDemo(page: Page, base: string, step: (page: Page, step
   await step(page, { name: 'repository', caption: 'Choose one: its skills, the chooser stays on top' });
   await type(page, 'co', keyDelay);
   await step(page, { name: 'filter', caption: 'Filter as you type: names that contain “co”' });
-  await page.locator('.list li:not([hidden]) a').nth(1).click();
+  await page.locator('.list li:not(.group):not([hidden]) a').nth(1).click();
   await step(page, { name: 'selected', caption: 'Select a matching skill' });
   await type(page, ' st', keyDelay);
   await step(page, { name: 'words', caption: 'Several words: names that contain every one' });
