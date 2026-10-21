@@ -1,7 +1,7 @@
 # Web view
 `./skill-atlas serve [--port <port>]`: a page at `http://127.0.0.1:<port>/`, port **3000** by default.
 A *thin client* like the CLI: it scans on every request; *nothing is stored*, but the organizations scanned lately
-([Organization](#organization)), in memory.
+([Organization](#organization)) and the groups a model made of the skills seen lately ([Output](#output)), in memory.
 ## Input
 A **GitHub repository** URL, in the page's form: `GET /?repo=<URL>`
 - GitHub only: the page *never reads local directories*
@@ -17,14 +17,25 @@ A **GitHub repository** URL, in the page's form: `GET /?repo=<URL>`
   the *selected* skill on the right: name, the *whole* description, the link pinned to the commit,
   `also in <paths>` for copies, and its **content**: the SKILL.md after the front matter
 - **Groups**: *similar* skills together in the list, each group under its name; on the right, the skills in the same order
-  - Similar: they share a **keyword** of their **name** and **description**: a word of *3 letters or more*, ignoring case,
+  - Similar: as a **small model** groups them, **`claude -p --model haiku`**, the Claude Code CLI on the `PATH`
+    (`SKILL_ATLAS_CLAUDE` if it is elsewhere), told every skill's name and description, numbered, on its input:
+    *no tools*, no session kept, run from the temporary directory, *a minute* at most; 2 skills or more, else not asked
+    - Its answer is *data*: groups of the skills' numbers, each with a name; a name is *text*, its whitespace collapsed,
+      cut at *40* letters; the groups with the same name, ignoring case, one group; a number it was not told dropped;
+      then, in the order of its answer, a group of the skills in *no group kept yet*: of *fewer than 2*, unnamed,
+      or `Other`, no group, nor one of *every* skill; a group dropped leaves its skills to the next ones
+    - Asked **once** for the same names and descriptions, pages served at once too: its groups **kept**, in memory,
+      for the *100* skill lists seen last, the one seen least lately dropped first; a failure is not kept
+    - It cannot be run, fails, takes too long, or answers no list → the keyword groups below, and a *warning*:
+      `similar skills grouped by their keywords: <message>`
+  - Else, without it (the tests, the demo), similar: they share a **keyword** of their **name** and **description**: a word of *3 letters or more*, ignoring case,
     but the common ones (`the`, `use`, `when`, `skill`…), its ending dropped: `-s`, `-es`, `-ed`, `-ing`, `-e`, and a doubled
     last letter: `commits`, `committing` → `commit`
   - The keyword shared by the *most* skills not in a group yet, *2* at least and *not every one of them*, makes a group of them; a tie:
     the keyword in more of their names, then the first one in alphabetical order; again, until no keyword is shared
-  - Its name: the keyword as most of its skills write it, else the shortest, then the first; the groups sorted by **name**,
+  - A keyword group's name: the keyword as most of its skills write it, else the shortest, then the first; the groups sorted by **name**,
     then `Other`: the skills in no group; in a group, the skills sorted by name
-  - No keyword shared → no groups: the list as it was, every skill sorted by name
+  - No group left, no keyword shared → no groups: the list as it was, every skill sorted by name
   - The filter: a group with no skill shown is not shown either; the groups stay those of the whole list
 - The *first* skill is selected by default, the first one of the first group; selecting another is `#skill-<name>`: *no new scan*, no script (CSS), a link to share
 - In `<name>`, anything but letters, digits, `_` and `-` is `-`; the same anchor again gets `-2`, `-3`…

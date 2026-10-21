@@ -1,10 +1,11 @@
 // The web view: a page that takes a GitHub repository URL and shows its skills and their content.
 // A thin client like the CLI: it scans on every request and stores nothing, but the organizations
-// scanned lately, so that choosing one of their repositories shows its skills at once.
+// scanned lately, so that choosing one of their repositories shows its skills at once, and the groups a model
+// made of the skills seen lately, so that it is asked once for them.
 import { createServer, type Server } from 'node:http';
 import { AtlasError } from './core/errors.ts';
 import { parseGitHubOrganizationUrl, parseGitHubUrl, type OrganizationResult } from './core/github.ts';
-import { groupSkills } from './core/group.ts';
+import { clusterSkills, groupSkills, type Cluster, type Group } from './core/group.ts';
 import { firstSentence, skillLink, type Repository, type Skill } from './core/model.ts';
 import { scan, type ScanResult, type Source } from './core/scan.ts';
 
@@ -18,11 +19,16 @@ export type WebOptions = {
   organization?(input: string, options?: { read?: boolean; progress?(message: string): void }): Promise<OrganizationResult>;
   /** The time, in milliseconds: when a kept organization is too old, how long ago a skill was updated. `Date.now` by default. */
   now?(): number;
+  /** Groups similar skills: a model, `claude -p` say. Without it, or when it fails, the skills that share a keyword. */
+  cluster?: Cluster;
 };
 
 /** How long a scanned organization is kept, and how many of them at most. */
 const KEPT_FOR = 10 * 60 * 1000;
 const KEPT = 10;
+
+/** How many skill lists the model's groups are kept for, at most. */
+const CLUSTERED = 100;
 
 /**
  * `GET /` is the form; `GET /?repo=<URL>` is the form and the repository's skills; `&filter=<words>`
@@ -32,7 +38,7 @@ const KEPT = 10;
  * organization as it was scanned if it is kept. The organization's page shows the scan's progress as it loads.
  * Only for this machine's own addresses: a page elsewhere must not read it through DNS rebinding.
  */
-export function createWebServer({ open, organization, now = Date.now }: WebOptions): Server {
+export function createWebServer({ open, organization, now = Date.now, cluster }: WebOptions): Server {
   // The organizations scanned lately, by login in lower case, the oldest first: the only thing stored.
   const kept = new Map<string, { at: number; listed: OrganizationResult }>();
   const key = (input: string) => parseGitHubOrganizationUrl(input)!.toLowerCase();
@@ -44,6 +50,31 @@ export function createWebServer({ open, organization, now = Date.now }: WebOptio
   const recall = (input: string) => {
     const entry = kept.get(key(input));
     return entry && now() - entry.at < KEPT_FOR ? entry.listed : undefined;
+  };
+  // The model's groups by the skills' names and descriptions, the one seen least lately first: the same skills, the same
+  // groups, asked once, even by pages served at once. A failure is not kept: the next page asks again.
+  const clustered = new Map<string, Promise<{ name: string; indexes: number[] }[]>>();
+  const grouped = async (skills: Skill[]): Promise<{ groups: Group[]; warning?: string }> => {
+    if (!cluster || skills.length < 2) return { groups: groupSkills(skills) };
+    const key = JSON.stringify(skills.map(({ name, description }) => [name, description]));
+    let groups = clustered.get(key);
+    // Seen again: the last one dropped.
+    if (groups) {
+      clustered.delete(key);
+      clustered.set(key, groups);
+    } else {
+      // Kept as indexes: a page scanned again has the same skills, as new objects, with their own commit.
+      groups = clusterSkills(skills, cluster).then((groups) => groups.map(({ name, skills: members }) => ({ name, indexes: members.map((member) => skills.indexOf(member)) })));
+      clustered.set(key, groups);
+      if (clustered.size > CLUSTERED) clustered.delete(clustered.keys().next().value!);
+      const failed = groups;
+      failed.catch(() => clustered.get(key) === failed && clustered.delete(key));
+    }
+    try {
+      return { groups: (await groups).map(({ name, indexes }) => ({ name, skills: indexes.map((index) => skills[index]) })) };
+    } catch (failure) {
+      return { groups: groupSkills(skills), warning: `similar skills grouped by their keywords: ${failure instanceof Error ? failure.message : String(failure)}` };
+    }
   };
 
   return createServer(async (request, response) => {
@@ -108,7 +139,10 @@ export function createWebServer({ open, organization, now = Date.now }: WebOptio
       let chooser = '';
       if (listed instanceof AtlasError) chooser = `<ul class="warnings"><li>warning: no repository chooser: ${escape(listed.message)}</li></ul>\n`;
       else if (listed) chooser = repositories(listed, input);
-      send(200, page(input, `${chooser}${result(scanned, input, filter, org, now())}`));
+      // Not on the scan itself: an organization's kept repository keeps its own warnings.
+      const { groups, warning } = await grouped(scanned.skills);
+      const shown = warning ? { ...scanned, warnings: [...scanned.warnings, warning] } : scanned;
+      send(200, page(input, `${chooser}${result(shown, groups, input, filter, org, now())}`));
     } catch (failure) {
       send(failure instanceof AtlasError ? 400 : 500, page(input, error(describe(failure))));
     }
@@ -192,7 +226,7 @@ ${options.join('\n')}
  * together in the list, under their group's name, and in the same order on the right; a group with no
  * skill shown is not shown either.
  */
-function result({ repository, skills, warnings }: ScanResult, input: string, filter: string, org: string, now: number): string {
+function result({ repository, skills, warnings }: ScanResult, grouped: Group[], input: string, filter: string, org: string, now: number): string {
   const count = `${skills.length} ${skills.length === 1 ? 'skill' : 'skills'}`;
   const commit = repository.commit ? ` at <code>${escape(repository.commit.slice(0, 7))}</code>` : '';
   const anchors = anchorsOf(skills);
@@ -201,7 +235,7 @@ ${warnings.length ? `<ul class="warnings">${warnings.map((warning) => `<li>warni
   if (!skills.length) return `${heading}\n<p class="empty">No skills found.</p>`;
   const words = filter.toLowerCase().split(/\s+/).filter(Boolean);
   const item = (skill: Skill) => ({ skill, anchor: anchors[skills.indexOf(skill)], shown: words.every((word) => skill.name.toLowerCase().includes(word)) });
-  const groups = groupSkills(skills).map(({ name, skills }) => ({ name, items: skills.map(item) }));
+  const groups = grouped.map(({ name, skills }) => ({ name, items: skills.map(item) }));
   // In the order of the list, its groups', so that the first one shown is the first one on the right too.
   const all = groups.length ? groups.flatMap(({ items }) => items) : skills.map(item);
   const none = all.every(({ shown }) => !shown);
