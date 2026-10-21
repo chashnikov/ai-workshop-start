@@ -3,4 +3,4 @@ name: communication
 description: Communicate with humans when you need to clarify something or ask for help.
 ---
 
-Use `#chashnikov-agent` channel in `aiworkshopatjetbrains.slack.com` Slack instance and take the access token from `SLACK_BOT_TOKEN` environment variable. 
+Use `#chashnikov-agent` channel (ID `C0CAZ5D09FB`) in `aiworkshopatjetbrains.slack.com` Slack instance and take the access token from `SLACK_BOT_TOKEN` environment variable. 
