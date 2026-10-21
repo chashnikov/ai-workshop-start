@@ -21,11 +21,11 @@ A **GitHub repository** URL, in the page's form: `GET /?repo=<URL>`
     (`SKILL_ATLAS_CLAUDE` if it is elsewhere), told every skill's name and description, numbered, on its input:
     *no tools*, no session kept, run from the temporary directory, *a minute* at most; 2 skills or more, else not asked
     - Its answer is *data*: groups of the skills' numbers, each with a name; a name is *text*, its whitespace collapsed,
-      cut at *40* letters; a skill in its *first* group only, a number it was not told dropped; the groups with the
-      same name, ignoring case, one group; a group of *fewer than 2* skills, unnamed, or `Other`, no group, nor
-      one of *every* skill
+      cut at *40* letters; the groups with the same name, ignoring case, one group; a number it was not told dropped;
+      then, in the order of its answer, a group of the skills in *no group kept yet*: of *fewer than 2*, unnamed,
+      or `Other`, no group, nor one of *every* skill; a group dropped leaves its skills to the next ones
     - Asked **once** for the same names and descriptions, pages served at once too: its groups **kept**, in memory,
-      for the *100* skill lists seen last; a failure is not kept
+      for the *100* skill lists seen last, the one seen least lately dropped first; a failure is not kept
     - It cannot be run, fails, takes too long, or answers no list → the keyword groups below, and a *warning*:
       `similar skills grouped by their keywords: <message>`
   - Else, without it (the tests, the demo), similar: they share a **keyword** of their **name** and **description**: a word of *3 letters or more*, ignoring case,

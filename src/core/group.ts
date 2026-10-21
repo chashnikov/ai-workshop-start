@@ -16,35 +16,35 @@ const LONGEST = 40;
 
 /**
  * The skills, sorted, in the groups `cluster` answers, once checked: a group's name is its text, its
- * whitespace collapsed, cut at LONGEST letters; a skill is in its first group only, one it does not
- * know is dropped; the groups with the same name, ignoring case, are one; a group of fewer than two
- * skills, unnamed, or `Other`, is none, nor is one of every skill. The groups sorted by name, `Other`
- * last, with the skills in no group; none when no group is left. Fails as `cluster` does, or when
- * its answer is not a list.
+ * whitespace collapsed, cut at LONGEST letters; the groups with the same name, ignoring case, are one;
+ * a skill it does not know is dropped; then, in the order of the answer, a group of the skills in no
+ * group kept yet: of fewer than two, unnamed, or `Other`, it is none, nor is one of every skill. The
+ * groups sorted by name, `Other` last, with the skills in no group; none when no group is left. Fails
+ * as `cluster` does, or when its answer is not a list.
  */
 export async function clusterSkills(skills: Skill[], cluster: Cluster): Promise<Group[]> {
   const answer = await cluster(skills.map(({ name, description }) => ({ name, description })));
   if (!Array.isArray(answer)) throw new Error('the groups are not a list');
-  const taken = new Set<number>();
-  const named = new Map<string, { name: string; members: number[] }>();
+  const named = new Map<string, { name: string; members: Set<number> }>();
   for (const group of answer as { name?: unknown; skills?: unknown }[]) {
     const name = typeof group?.name === 'string' ? group.name.replace(/\s+/g, ' ').trim().slice(0, LONGEST).trim() : '';
     if (!name || name.toLowerCase() === 'other' || !Array.isArray(group.skills)) continue;
-    const members: number[] = [];
-    for (const index of group.skills) {
-      if (!Number.isInteger(index) || index < 0 || index >= skills.length || taken.has(index)) continue;
-      taken.add(index);
-      members.push(index);
-    }
-    const same = named.get(name.toLowerCase());
-    if (same) same.members.push(...members);
-    else named.set(name.toLowerCase(), { name, members });
+    const members = named.get(name.toLowerCase())?.members ?? new Set<number>();
+    for (const index of group.skills) if (Number.isInteger(index) && index >= 0 && index < skills.length) members.add(index);
+    if (!named.has(name.toLowerCase())) named.set(name.toLowerCase(), { name, members });
   }
-  const groups = [...named.values()].filter(({ members }) => members.length >= 2 && members.length < skills.length);
+  // Only a group that is kept takes its skills: one that is dropped leaves them to the next ones.
+  const grouped = new Set<number>();
+  const groups: { name: string; members: number[] }[] = [];
+  for (const { name, members } of named.values()) {
+    const free = [...members].filter((index) => !grouped.has(index));
+    if (free.length < 2 || free.length === skills.length) continue;
+    for (const index of free) grouped.add(index);
+    groups.push({ name, members: free });
+  }
   if (!groups.length) return [];
   const sorted = (members: number[]) => members.sort((a, b) => compare(skills[a].name, skills[b].name) || a - b).map((index) => skills[index]);
   const result = groups.map(({ name, members }) => ({ name, skills: sorted(members) })).sort((a, b) => compare(a.name, b.name));
-  const grouped = new Set(groups.flatMap(({ members }) => members));
   const left = skills.map((_, index) => index).filter((index) => !grouped.has(index));
   if (left.length) result.push({ name: 'Other', skills: sorted(left) });
   return result;

@@ -10,7 +10,7 @@ import { after, test } from 'node:test';
 import { claudeCluster } from '../src/core/claude.ts';
 import { openGitHub } from '../src/core/github.ts';
 import type { Cluster } from '../src/core/group.ts';
-import { replay } from '../src/core/replay.ts';
+import { replay, type Recording } from '../src/core/replay.ts';
 import { createWebServer } from '../src/web.ts';
 import { NOW, onGitHub } from './helpers.ts';
 
@@ -23,10 +23,10 @@ const TEAM = onGitHub('team', {
   '.claude/skills/prettier/SKILL.md': '---\nname: prettier\ndescription: Formats the sources.\n---\nFormat.\n',
 });
 
-/** TEAM, every description with `words` at its end. */
-function team(words: string) {
+/** TEAM, every description with `words` at its end, as JetBrains/<name>. */
+function team(words: string, name = 'team') {
   const files = Object.entries(TEAM).filter(([url]) => url.startsWith('https://raw.githubusercontent.com/'));
-  return onGitHub('team', Object.fromEntries(files.map(([url, { body }]) => [url.split(/\/[0-9a-f]{40}\//)[1], String(body).replace('.\n---', `. ${words}\n---`)])));
+  return onGitHub(name, Object.fromEntries(files.map(([url, { body }]) => [url.split(/\/[0-9a-f]{40}\//)[1], String(body).replace('.\n---', `. ${words}\n---`)])));
 }
 
 /** Two skills that share a keyword, `gradle`: the groups without a model. */
@@ -133,6 +133,80 @@ test('groups by a model: its answer checked; a skill in its first group only, un
       { name: 'Release', skills: ['bump', 'changelog'] },
       { name: 'Other', skills: ['hello'] },
     ]);
+  } finally {
+    other.closeAllConnections();
+    other.close();
+  }
+});
+
+/** The groups of JetBrains/<repo>'s page, served by a web view of its own, with `recording` for GitHub. */
+async function alone(recording: Recording, repo = 'team') {
+  const other = createWebServer({ open: (input) => openGitHub(input, { fetch: replay(recording) }), now: () => NOW, cluster: model });
+  other.listen(0, '127.0.0.1');
+  await once(other, 'listening');
+  try {
+    const response = await fetch(`http://127.0.0.1:${(other.address() as AddressInfo).port}/?repo=${encodeURIComponent(`https://github.com/JetBrains/${repo}`)}`);
+    return groups(await response.text());
+  } finally {
+    other.closeAllConnections();
+    other.close();
+  }
+}
+
+test('groups by a model: a name cut at 40 letters, its whitespace at the end dropped', async () => {
+  answer = async () => [
+    { name: 'abcdefghij'.repeat(5), skills: [3, 4] },
+    { name: `${'x'.repeat(39)} release`, skills: [0, 1] },
+  ];
+  assert.deepEqual(await alone(team('cut')), [
+    { name: 'abcdefghij'.repeat(4), skills: ['lint', 'prettier'] },
+    { name: 'x'.repeat(39), skills: ['bump', 'changelog'] },
+    { name: 'Other', skills: ['hello'] },
+  ]);
+});
+
+test('groups by a model: a group dropped leaves its skills to the next ones', async () => {
+  answer = async () => [
+    // `bump` alone: no group, so `bump` is still free for `release`.
+    { name: 'versions', skills: [0] },
+    { name: 'release', skills: [0, 1] },
+    // Every skill but `hello` is in a group kept: `hello` alone, no group.
+    { name: 'style', skills: [3, 4, 0] },
+    { name: 'people', skills: [2, 1] },
+  ];
+  assert.deepEqual(await alone(team('dropped')), [
+    { name: 'release', skills: ['bump', 'changelog'] },
+    { name: 'style', skills: ['lint', 'prettier'] },
+    { name: 'Other', skills: ['hello'] },
+  ]);
+});
+
+test('groups by a model: kept for the 100 skill lists seen last; the one seen least lately dropped first', async () => {
+  const repos = Array.from({ length: 101 }, (_, index) => `team-${index}`);
+  const recording = Object.assign({}, ...repos.map((repo) => team(repo, repo)));
+  const other = createWebServer({ open: (input) => openGitHub(input, { fetch: replay(recording) }), now: () => NOW, cluster: model });
+  other.listen(0, '127.0.0.1');
+  await once(other, 'listening');
+  const view = async (repo: string) => {
+    const response = await fetch(`http://127.0.0.1:${(other.address() as AddressInfo).port}/?repo=${encodeURIComponent(`https://github.com/JetBrains/${repo}`)}`);
+    assert.equal(groups(await response.text())[0]?.name, 'release', repo);
+  };
+  try {
+    answer = async () => [{ name: 'release', skills: [0, 1] }];
+    asked.length = 0;
+    // 100 lists: every one asked once.
+    for (const repo of repos.slice(0, 100)) await view(repo);
+    assert.equal(asked.length, 100);
+    // team-0 seen again: kept, and now the one seen last.
+    await view('team-0');
+    assert.equal(asked.length, 100);
+    // The 101st: team-1, seen least lately, is dropped, not team-0.
+    await view('team-100');
+    assert.equal(asked.length, 101);
+    await view('team-0');
+    assert.equal(asked.length, 101);
+    await view('team-1');
+    assert.equal(asked.length, 102);
   } finally {
     other.closeAllConnections();
     other.close();
@@ -259,6 +333,9 @@ test('claude -p fails → a clear message: not found, an exit code, an error, no
     [`console.error('Not logged in'); process.exit(1);`, /exited with 1: Not logged in$/],
     [`console.log(JSON.stringify({ type: 'result', is_error: true, result: 'Credit balance is too low' }));`, /^Error: claude failed: Credit balance is too low$/],
     [`console.log('Hello');`, /^Error: claude printed no JSON: Hello$/],
+    // JSON, but not what it prints.
+    [`console.log('null');`, /^Error: claude printed no JSON: null$/],
+    [`console.log('3');`, /^Error: claude printed no JSON: 3$/],
     [`console.log(JSON.stringify({ type: 'result', is_error: false, result: 'Sorry.' }));`, /^Error: claude answered no groups$/],
   ];
   for (const [body, message] of cases) { const t = Date.now(); await assert.rejects(claudeCluster({ command: fakeClaude(body).command })(SKILLS), message); console.log('CASE', Date.now() - t); }

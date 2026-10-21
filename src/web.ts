@@ -51,14 +51,18 @@ export function createWebServer({ open, organization, now = Date.now, cluster }:
     const entry = kept.get(key(input));
     return entry && now() - entry.at < KEPT_FOR ? entry.listed : undefined;
   };
-  // The model's groups by the skills' names and descriptions, the oldest first: the same skills, the same
+  // The model's groups by the skills' names and descriptions, the one seen least lately first: the same skills, the same
   // groups, asked once, even by pages served at once. A failure is not kept: the next page asks again.
   const clustered = new Map<string, Promise<{ name: string; indexes: number[] }[]>>();
   const grouped = async (skills: Skill[]): Promise<{ groups: Group[]; warning?: string }> => {
     if (!cluster || skills.length < 2) return { groups: groupSkills(skills) };
     const key = JSON.stringify(skills.map(({ name, description }) => [name, description]));
     let groups = clustered.get(key);
-    if (!groups) {
+    // Seen again: the last one dropped.
+    if (groups) {
+      clustered.delete(key);
+      clustered.set(key, groups);
+    } else {
       // Kept as indexes: a page scanned again has the same skills, as new objects, with their own commit.
       groups = clusterSkills(skills, cluster).then((groups) => groups.map(({ name, skills: members }) => ({ name, indexes: members.map((member) => skills.indexOf(member)) })));
       clustered.set(key, groups);

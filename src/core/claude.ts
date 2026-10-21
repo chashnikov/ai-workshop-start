@@ -56,12 +56,14 @@ export function claudeCluster({ command = 'claude', model = 'haiku', timeout = 6
 
 /** The groups in what `claude -p --output-format json` printed: its structured output, else its result as JSON. */
 function answer(output: string): unknown {
-  let printed: { is_error?: boolean; result?: unknown; structured_output?: unknown };
+  let printed: { is_error?: boolean; result?: unknown; structured_output?: unknown } | null = null;
   try {
     printed = JSON.parse(output);
   } catch {
-    throw new Error(`claude printed no JSON: ${output.trim().slice(0, 200)}`);
+    // Not JSON: below.
   }
+  // `null` or `3`, JSON but not what it prints: no JSON either.
+  if (!printed || typeof printed !== 'object') throw new Error(`claude printed no JSON: ${output.trim().slice(0, 200)}`);
   if (printed.is_error) throw new Error(`claude failed: ${String(printed.result ?? '')}`);
   let groups = (printed.structured_output as { groups?: unknown } | undefined)?.groups;
   if (groups === undefined && typeof printed.result === 'string') {
