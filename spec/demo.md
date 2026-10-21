@@ -3,6 +3,7 @@
 - Works on a *remote machine*: a **headless** browser, Playwright's Chromium; *no display*, no network, no `GITHUB_TOKEN`
   - `./fixture`, served as if it were `JetBrains/fixture` on GitHub, as in the tests, in the organization `JetBrains`,
     listed without a token, with `JetBrains/tools` (one skill) and `JetBrains/docs` (none)
+  - Seen as of a fixed time, `2026-10-21 12:00 UTC`: the same `Updated … ago` whenever it is played
 - What it shows, each step with a caption and the page's address:
   `https://github.com/JetBrains` typed, its repositories with skills in the chooser; `JetBrains/fixture` chosen, every skill,
   the chooser on top; `co` typed *letter by letter*; a matching skill selected; `co st`, several words; `zzz`, no match;

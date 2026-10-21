@@ -10,7 +10,10 @@ A **GitHub repository** URL, in the page's form: `GET /?repo=<URL>`
 ## Output
 `<owner>/<repo> · N skills`, linked to the repository, with the scanned commit
 - **Master-detail**: the skills in a *left column*, sorted by **name**: name, the description's *first sentence*, and when it
-  was **last updated** ([analysis.md](analysis.md#details)): `Updated 2026-10-20 15:05 UTC`, in *UTC*, no script; nothing when not known;
+  was **last updated** ([analysis.md](analysis.md#details)), **relative**: `Updated 3 days ago`, as of when the page is served, no script;
+  in its largest whole unit: `just now` (under a minute, or a time still to come), `N minutes`, `N hours`, `N days`,
+  `N months` (30 days), `N years` (365 days), `1 day ago` not `1 days`; the date and time in *UTC*, `2026-10-20 15:05 UTC`, as its *tooltip*;
+  nothing when not known;
   the *selected* skill on the right: name, the *whole* description, the link pinned to the commit,
   `also in <paths>` for copies, and its **content**: the SKILL.md after the front matter
 - The *first* skill is selected by default; selecting another is `#skill-<name>`: *no new scan*, no script (CSS), a link to share

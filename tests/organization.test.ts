@@ -600,7 +600,7 @@ test('web: choosing a repository of an organization just scanned → its skills 
   assert.deepEqual([...page.html.matchAll(/<span class="name">([^<]*)<\/span>/g)].map(([, name]) => name), ['review', 'testing']);
   assert.ok(page.html.includes(`https://github.com/Acme/tools/blob/${COMMIT}/.agents/skills/review/SKILL.md`));
   // When each one was last updated: read with the organization, kept with it.
-  assert.equal([...page.html.matchAll(/<time class="updated" datetime="2026-10-01T12:00:00.000Z">Updated 2026-10-01 12:00 UTC<\/time>/g)].length, 2);
+  assert.equal([...page.html.matchAll(/<time class="updated" datetime="2026-10-01T12:00:00.000Z" title="2026-10-01 12:00 UTC">Updated [^<]*<\/time>/g)].length, 2);
   // With a filter, sent with Enter without the script: at once too.
   await get(`${chosen}&filter=test`);
   assert.equal(requests.length, 0, requests.join(" "));

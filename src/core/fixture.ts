@@ -12,6 +12,9 @@ export const COMMIT = '0123456789abcdef0123456789abcdef01234567';
 /** When a file was last updated, unless `onGitHub` is told otherwise. */
 export const UPDATED = '2026-10-01T12:00:00Z';
 
+/** The time the tests and the demo look from: how long ago a skill was updated, as of it. */
+export const NOW = Date.parse('2026-10-21T12:00:00Z');
+
 /** When ./fixture's skills were last updated, as GitHub answers for JetBrains/fixture. */
 export const FIXTURE_UPDATED: Record<string, string> = {
   '.claude/skills/code-style/SKILL.md': '2026-09-14T08:12:45Z',

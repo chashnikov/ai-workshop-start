@@ -6,7 +6,7 @@ import { history } from '../src/core/fixture.ts';
 import { replay, type Recording } from '../src/core/replay.ts';
 import { openDirectory } from '../src/local.ts';
 
-export { COMMIT, FIXTURE, FIXTURE_UPDATED, fixtureOnGitHub, history, onGitHub, UPDATED } from '../src/core/fixture.ts';
+export { COMMIT, FIXTURE, FIXTURE_UPDATED, fixtureOnGitHub, history, NOW, onGitHub, UPDATED } from '../src/core/fixture.ts';
 export const CLI = fileURLToPath(new URL('../src/cli.ts', import.meta.url));
 
 /** The commit GitHub answers for JetBrains/example. */

@@ -4,7 +4,7 @@
 import { once } from 'node:events';
 import type { AddressInfo } from 'node:net';
 import type { Page } from 'playwright';
-import { organizationOnGitHub } from '../src/core/fixture.ts';
+import { NOW, organizationOnGitHub } from '../src/core/fixture.ts';
 import { openGitHub, scanOrganization } from '../src/core/github.ts';
 import { replay } from '../src/core/replay.ts';
 import { createWebServer } from '../src/web.ts';
@@ -20,6 +20,8 @@ export async function startDemoServer() {
   const server = createWebServer({
     open: (input) => openGitHub(input, { fetch: github }),
     organization: (input, { read, progress } = {}) => scanOrganization(input, { fetch: github, read, progress }),
+    // The same "Updated … ago" whenever it is played: the screenshots stay the same.
+    now: () => NOW,
   });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
