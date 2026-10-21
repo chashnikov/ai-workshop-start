@@ -9,7 +9,8 @@ Read the issue description labeled with `Delegated to AI` and create a pull requ
 
 ## Asking for clarifications
 
-If it isn't clear how to implement the issue, ask for help using `communication` skill. 
+If it isn't clear how to implement the issue, ask for help using `communication` skill.
+Wait until a human responds, and then continue taking the answer into account.
 
 ## Updating screenshots
 
