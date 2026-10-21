@@ -116,6 +116,9 @@ test('narrow screens: a link to a skill scrolls to it', async ({ page }) => {
 /** Scrolled so that its top is 1rem below the window's, as far as the page scrolls. */
 async function scrolledTo(page: Page, selector: string) {
   const max = await scrollable(page);
-  await expect.poll(async () => Math.min(max, await scrollY(page) + await top(page, selector) - 16)).toBe(await scrollY(page));
-  expect(await scrollY(page)).toBeGreaterThan(0);
+  // Polled as one value, the page and the element read together: the page may still be scrolling.
+  await expect.poll(() => page.locator(selector).first().evaluate((element, max) => {
+    const { scrollY } = element.ownerDocument.defaultView!;
+    return scrollY > 0 && Math.abs(Math.min(max, scrollY + (element as any).getBoundingClientRect().top - 16) - scrollY) < 1;
+  }, max)).toBe(true);
 }
