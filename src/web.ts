@@ -305,13 +305,13 @@ function ago(elapsed: number): string {
 
 function detail(repository: Repository, skill: Skill, anchor: string, shown: boolean): string {
   const link = skillLink(repository, skill);
-  return `<section class="detail" id="${anchor}"${shown ? '' : ' hidden'}>
+  return `<section class="detail" id="${anchor}"${shown ? '' : ' hidden'}><div class="panel">
 <h3>${escape(skill.name)}</h3>
 ${skill.description ? `<p class="description">${escape(skill.description)}</p>` : ''}
 <p class="link"><a href="${escape(link)}">${escape(skill.path)}</a></p>
 ${skill.copies.length ? `<p class="copies">also in ${skill.copies.map((copy) => `<code>${escape(copy)}</code>`).join(', ')}</p>` : ''}
 ${skill.body ? `<pre class="content">${escape(skill.body)}</pre>` : '<p class="content empty">No content after the front matter.</p>'}
-</section>`;
+</div></section>`;
 }
 
 function error(message: string): string {
@@ -366,10 +366,10 @@ a { color: #0969da; }
 .group:first-child .group-name { margin-top: 0; }
 /* A group with no skill shown: the filter left none of it. */
 .group:not(:has(li:not([hidden]))) { display: none; }
-.detail { display: none; border: 1px solid #d0d7de; border-radius: 6px; padding: 0 1rem 1rem; min-width: 0; }
-.detail:target:not([hidden]), .details:not(:has(.detail:target:not([hidden]))) .detail:nth-child(1 of :not([hidden])) { display: block; }
-/* Selecting a skill scrolls to it; a margin taller than the screen keeps the page at the top, the repository in view. */
-.detail { scroll-margin-top: 100vh; }
+.detail { display: none; }
+/* The selected one has no box of its own, its panel has: following its #anchor scrolls nothing, the page stays where it was. */
+.detail:target:not([hidden]), .details:not(:has(.detail:target:not([hidden]))) .detail:nth-child(1 of :not([hidden])) { display: contents; }
+.panel { border: 1px solid #d0d7de; border-radius: 6px; padding: 0 1rem 1rem; min-width: 0; }
 .detail h3 { font-size: 1.5rem; }
 .description { margin-top: 0; }
 .link, .copies { font-size: .875rem; margin: .25rem 0; }
@@ -378,5 +378,5 @@ a { color: #0969da; }
 .content.empty { background: none; padding: 0; }
 .warnings { color: #9a6700; }
 .error { color: #d1242f; font-weight: 600; }
-@media (max-width: 48rem) { .skills { grid-template-columns: 1fr; } .list { position: static; max-height: none; } .detail { scroll-margin-top: 1rem; } }
+@media (max-width: 48rem) { .skills { grid-template-columns: 1fr; } .list { position: static; max-height: none; } .detail:target:not([hidden]) { display: block; scroll-margin-top: 1rem; } }
 `;

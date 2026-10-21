@@ -25,6 +25,8 @@ test('demo: each key moment looks as its screenshot', async ({ page }) => {
       await expect(page).toHaveScreenshot(`${name}.png`, { fullPage: true });
     });
   });
-  expect(steps).toEqual(['organization', 'repository', 'filter', 'selected', 'words', 'no-match', 'empty']);
-  await expect(page).toHaveURL(/#skill-commits$/);
+  expect(steps).toEqual(['organization', 'repository', 'filter', 'selected', 'words', 'no-match', 'empty', 'scrolled']);
+  // Selecting a skill scrolled down: the page stays where it was.
+  await expect(page).toHaveURL(/#skill-testing$/);
+  expect(await page.evaluate('scrollY')).toBeGreaterThan(0);
 });

@@ -310,10 +310,10 @@ test('the first skill is selected by default; a link to #<anchor> selects anothe
   // CSS selects; the only script is the filter's.
   assert.equal(scripts(page.html).length, 1);
   // Only the selected section is shown: the targeted one, else the first one; never a hidden one.
-  assert.match(page.html, /\.detail \{ display: none;/);
+  assert.match(page.html, /\.detail \{ display: none; \}/);
   assert.match(
     page.html,
-    /\.detail:target:not\(\[hidden\]\), \.details:not\(:has\(\.detail:target:not\(\[hidden\]\)\)\) \.detail:nth-child\(1 of :not\(\[hidden\]\)\) \{ display: block; \}/,
+    /\.detail:target:not\(\[hidden\]\), \.details:not\(:has\(\.detail:target:not\(\[hidden\]\)\)\) \.detail:nth-child\(1 of :not\(\[hidden\]\)\) \{ display: contents; \}/,
   );
   // Its item in the list is highlighted the same way.
   for (const { anchor } of list(page.html)) {
@@ -479,16 +479,19 @@ test('HEAD: the headers only, no scan; another method → 405 with Allow: GET, H
   assert.equal(text(posted.html), 'Only GET is supported');
 });
 
-test('selecting a skill keeps the page at the top: the repository stays in view', async () => {
+test('selecting a skill does not move the page: at the top, the repository stays in view', async () => {
   const page = await view('github.com/JetBrains/fixture');
-  // The browser scrolls to the selected #anchor less its margin, and never above the page's top.
-  assert.match(page.html, /\.detail \{ scroll-margin-top: 100vh; \}/);
+  // The selected section has no box, its panel has: following its #anchor, the browser has nothing to scroll to.
+  // In a browser: e2e/selection.spec.ts.
+  assert.doesNotMatch(page.html, /scroll-margin-top: 100vh/);
+  for (const [anchor, section] of details(page.html, true)) assert.ok(section.startsWith('<div class="panel">\n<h3>') && section.endsWith('</div>'), anchor);
+  assert.match(page.html, /\.panel \{ border: 1px solid #d0d7de;/);
   assert.ok(page.html.indexOf('<h2 class="repository">') < page.html.indexOf('<div class="skills">'));
 });
 
 test('narrow screens: the list above the skill; selecting one scrolls to it', async () => {
   const page = await view('github.com/JetBrains/fixture');
-  assert.match(page.html, /@media \(max-width: 48rem\) \{ \.skills \{ grid-template-columns: 1fr; \}.* \.detail \{ scroll-margin-top: 1rem; \} \}/);
+  assert.match(page.html, /@media \(max-width: 48rem\) \{ \.skills \{ grid-template-columns: 1fr; \}.* \.detail:target:not\(\[hidden\]\) \{ display: block; scroll-margin-top: 1rem; \} \}/);
   // The list comes first in the page, so in one column it is above the skill.
   assert.ok(page.html.indexOf('<nav class="list">') < page.html.indexOf('<div class="details">'));
 });

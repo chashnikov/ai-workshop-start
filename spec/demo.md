@@ -7,13 +7,13 @@
 - What it shows, each step with a caption and the page's address:
   `https://github.com/JetBrains` typed, its repositories with skills in the chooser; `JetBrains/fixture` chosen, every skill,
   the chooser on top; `co` typed *letter by letter*; a matching skill selected; `co st`, several words; `zzz`, no match;
-  the field emptied, every skill again
+  the field emptied, every skill again; scrolled down, another skill selected with a click where it is, the page where it was
 - Prints each step, the words, the skills shown and the address's anchor (the selected skill), then `Recorded: <file>`
   - the organization's step: its heading and the chooser's repositories instead of the words and the skills
 ## Screenshot test
 `npm run test:screenshots`, part of `npm test`: the same demo, with Playwright Test; each step's page compared with its
 screenshot, kept in Git: `e2e/screenshots/<step>.png`, the whole page, without the caption
-- The steps: `organization`, `repository`, `filter`, `selected`, `words`, `no-match`, `empty`
+- The steps: `organization`, `repository`, `filter`, `selected`, `words`, `no-match`, `empty`, `scrolled`
 - Rendered by Playwright's headless Chromium on Linux, as in CI; a page changed on purpose →
   `npm run test:screenshots -- --update-snapshots=all`, every one, a change too small to fail the test too, and the new screenshots committed; or the `update-screenshots`
   label on the pull request: CI renders them and commits them to its branch

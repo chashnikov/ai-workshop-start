@@ -35,8 +35,8 @@ test('demo: a video of an organization\'s chooser and the filter, with no displa
   // WebM: an EBML header, and more than a still frame.
   assert.deepEqual([...video.subarray(0, 4)], [0x1a, 0x45, 0xdf, 0xa3]);
   assert.ok(video.length > 50_000, `${video.length} bytes`);
-  // What it shows: the organization's repositories with skills, one chosen: every skill, then the filter as it is typed, a selection, several words, no match, empty.
-  // The selection is the address's anchor: #skill-commits from the click on, as the filter keeps it.
+  // What it shows: the organization's repositories with skills, one chosen: every skill, then the filter as it is typed, a selection, several words, no match, empty,
+  // then another selection, scrolled down. The selection is the address's anchor: #skill-commits from the click on, as the filter keeps it.
   const steps = stdout.split('\n').filter((line) => line.includes(' | ')).map((line) => line.split(' | ').slice(1).join(' | '));
   assert.deepEqual(steps, [
     'JetBrains · 2 repositories with skills → JetBrains/fixture · 4 skills, JetBrains/tools · 1 skill | no anchor',
@@ -46,6 +46,7 @@ test('demo: a video of an organization\'s chooser and the filter, with no displa
     '“co st” → code-style | #skill-commits',
     '“zzz” → No skills match | #skill-commits',
     '“” → code-style, commits, release-checklist, testing | #skill-commits',
+    '“” → code-style, commits, release-checklist, testing | #skill-testing',
   ]);
 });
 
