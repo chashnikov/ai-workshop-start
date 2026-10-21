@@ -15,7 +15,7 @@ build-tools-bump-gradle-api — Bumps the Gradle API version that Kotlin Gradle 
 
 For an organization, `./skill-atlas scan https://github.com/<organization>` lists its repositories with skills.
 
-`./skill-atlas serve` opens the same in a browser, at http://127.0.0.1:3000/, with each skill's content and how long ago it was last updated; for an organization, a chooser of its repositories.
+`./skill-atlas serve` opens the same in a browser, at http://127.0.0.1:3000/, with similar skills grouped together, each skill's content and how long ago it was last updated; for an organization, a chooser of its repositories.
 
 `npm run demo` records a video of its organization chooser and filter, in a headless browser: on a remote machine too, with no
 display ([spec/demo.md](spec/demo.md)).
