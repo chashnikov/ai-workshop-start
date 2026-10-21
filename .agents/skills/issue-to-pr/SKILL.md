@@ -7,6 +7,10 @@ description: Create a pull request from an issue.
 
 Read the issue description labeled with `Delegated to AI` and create a pull request for it.
 
+## Asking for clarifications
+
+If it isn't clear how to implement the issue, ask for help using `communication` skill. 
+
 ## Updating screenshots
 
 If a pull request is expected to modify the user interface, update the screenshots in `e2e/screenshots`.
