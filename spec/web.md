@@ -28,7 +28,8 @@ A **GitHub repository** URL, in the page's form: `GET /?repo=<URL>`
   - The filter: a group with no skill shown is not shown either; the groups stay those of the whole list
 - The *first* skill is selected by default, the first one of the first group; selecting another is `#skill-<name>`: *no new scan*, no script (CSS), a link to share
 - In `<name>`, anything but letters, digits, `_` and `-` is `-`; the same anchor again gets `-2`, `-3`…
-- Selecting a skill keeps the page at the top: the repository stays *in view*
+- Selecting a skill *does not move the page*: scrolled down, the list and the skill stay where they were, skills below the
+  first screen too (warnings above them, say); at the top, the repository stays *in view*. A link to a skill: the page at the top
 - No skills → `No skills found.`
 - **Filter**: a text field *above the list*, *no button*; `&filter=<words>` shows only the skills whose **name**
   contains *every* word, in any order, ignoring case; words are separated by spaces; empty → every skill

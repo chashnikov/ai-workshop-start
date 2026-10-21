@@ -56,6 +56,14 @@ export async function playDemo(page: Page, base: string, step: (page: Page, step
   await step(page, { name: 'no-match', caption: 'No skill matches' });
   await filterField(page).fill('');
   await step(page, { name: 'empty', caption: 'Empty: every skill again' });
+  // Scrolled down, a click where the skill is, as a user would: locator.click() would scroll it into view itself.
+  await page.mouse.move(SIZE.width / 2, SIZE.height / 2);
+  await page.mouse.wheel(0, SIZE.height);
+  await page.waitForFunction('scrollY > 0');
+  const testing = (await page.locator('.list a[href="#skill-testing"]').boundingBox())!;
+  await page.mouse.click(testing.x + testing.width / 2, testing.y + testing.height / 2);
+  await page.waitForURL(/#skill-testing$/);
+  await step(page, { name: 'scrolled', caption: 'Scrolled down, select another skill: the page stays where it was' });
 }
 
 export function filterField(page: Page) {
